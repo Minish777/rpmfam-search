@@ -72,7 +72,7 @@ class TestPersonName(unittest.TestCase):
 
 class TestSurnames(unittest.TestCase):
     def test_all_surnames(self):
-        self.assertEqual(len(ES), 28)
+        self.assertEqual(len(ES), 29)
 
     def test_no_intro_text_as_surname(self):
         """Баг: вводный абзацы документа попадали в список как фамилии."""
@@ -163,6 +163,12 @@ class TestNotes(unittest.TestCase):
     def test_ref_resolves_to_people(self):
         target = r.resolve_ref(ES, BY_NAME["Эскобар"]["ref"])
         self.assertTrue([p for b in target["blocks"] for p in b["people"]])
+
+    def test_broken_ref_detected(self):
+        """В документе бывает ссылка на фамилию, которой в списке уже нет."""
+        e = BY_NAME["Якубов"]
+        self.assertEqual(e["ref"], "Несуществующей")
+        self.assertIsNone(r.resolve_ref(ES, e["ref"]))
 
 
 class TestLinks(unittest.TestCase):

@@ -588,8 +588,9 @@ def print_entry(e: dict, entries_list, depth: int = 0, seen=None, links=None,
             print_entry(target, entries_list, depth + 1,
                         seen | {key(target["name"])}, links)
         else:
-            gone = f"(фамилия {e['ref']} больше не в документе)"
-            print(f"{pad}  {C.dim(gone)}")
+            print(f"{pad}  {C.red('⛔')} {C.yellow('битая ссылка')} "
+                  f"({e['ref']}{C.red(' больше нет в документе)')}")
+            print(f"{pad}  {C.dim('спроси автора документа, на какую фамилию ссылаться')}")
     elif not people and e.get("star"):
         star_notice(pad + "  ")
     elif not people:
@@ -912,37 +913,27 @@ def handle_doc(value: str | None, ctx: dict, name: str | None = None) -> int:
 # ---------------------------------------------------------------- main
 
 EPILOG = """\
-что можно искать
-  Фамилия            rpmfam-search Амброус       (можно часть: Амб)
-  Имя                rpmfam-search "Григорий"
-  Ник                rpmfam-search sqW1nz
-  Номер паспорта     rpmfam-search 910442         (или RPM-910442)
-  Телефон            rpmfam-search 14882930
-  Ошибка в фамилии   rpmfam-search Кингсманн  ->  покажет похожие
-
 примеры
-  rpmfam-search                новые фамилии за неделю
-  rpmfam-search -s 1           новые за сегодня
-  rpmfam-search -s 0           только с прошлого запуска
-  rpmfam-search --all          весь список по алфавиту
-  rpmfam-search Аккерман       покажет и двойные фамилии того же человека
-  rpmfam-search -c Ли          искать только по представителю
-  rpmfam-search -r Амброус     обновить данные, игнорируя кеш
-  rpmfam-search --check        проверить, что данные разобрались верно
-  rpmfam-search --doc          показать, какой документ подключён
-  rpmfam-search --clean        удалить кеш и историю (скрипт останется)
+  rpmfam-search Амброус      по фамилии (можно часть: Амб)
+  rpmfam-search sqW1nz       по нику представителя
+  rpmfam-search 910442       по номеру паспорта или телефона
+  rpmfam-search Кингсманн    опечатка -> покажет похожие
+  rpmfam-search              новые фамилии за неделю
+  rpmfam-search --all        весь список по алфавиту
+  rpmfam-search --check      проверить, что данные разобрались верно
 
-что означают пометки в выводе
-  * подойдёт любой представитель    условия выдачи отличаются
-  ⚠                               предупреждение из документа
-  Двойные фамилии того же человека   у человека две фамилии
-  → относится к фамилии           фамилия привязана к другой
+знаки в выводе
+  *   подойдёт любой представитель фамилии
+  ⚠   предупреждение из документа
+  ⛔  битая ссылка «относится к фамилии» — правьте у автора документа
 
-где хранятся данные
-  кеш и история фамилий — в системном каталоге кеша
-  подключённый документ — в конфиге пользователя
-  Всё это удаляется командой --clean. Утилита только читает документ,
-  ничего в нём не меняет и никуда ничего не отправляет.
+свой документ
+  rpmfam-search --doc                    что подключено
+  rpmfam-search --doc <ссылка> --name X  подключить и запомнить
+  rpmfam-search --doc reset              вернуть встроенный
+
+утилита только читает документ и ничего в нём не меняет.
+Кеш и настройки удаляются командой --clean.
 """
 
 
@@ -1042,16 +1033,26 @@ def main(argv: list[str] | None = None) -> int:
             if head != cur:
                 cur = head
                 print(f"\n{C.bold(cur)}")
-            print("  " + e["name"] + (" " + C.yellow("*") if e["star"] else ""))
+            mark = " " + C.yellow("*") if e["star"] else ""
+            if e.get("ref") and not resolve_ref(entries_list, e["ref"]):
+                mark += " " + C.red("⛔")
+            print("  " + e["name"] + mark)
         stars = [e["name"] for e in entries_list if e["star"]]
+        broken = [e["name"] for e in entries_list
+                  if e.get("ref") and not resolve_ref(entries_list, e["ref"])]
         print(C.dim(f"\nвсего фамилий: {len(entries_list)}"
-                    f" | со звёздочкой: {len(stars)}"))
+                    f" | со звёздочкой: {len(stars)}"
+                    + (f" | битых ссылок: {len(broken)}" if broken else "")))
         if stars:
             print()
             print(C.yellow(C.bold("* — подойдёт любой представитель фамилии"))
                   + C.dim(" (условия выдачи отличаются от обычных)"))
             print(C.dim("  Уточняй у Главы фамилии заранее, до выдачи. "
                         "Фамилии: " + ", ".join(stars)))
+        if broken:
+            print(C.red("⛔ ") + C.yellow("битая ссылка в документе: ")
+                  + ", ".join(broken)
+                  + C.dim(" — надо поправить у автора документа"))
         footer(db, ctx)
         return 0
 
