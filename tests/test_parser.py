@@ -468,6 +468,18 @@ class TestBanned(unittest.TestCase):
         hits = [e["name"] for e in with_ban if r.ban_reason(e["name"])]
         self.assertEqual(hits, ["Зетрикс"])
 
+    def test_notice_mentions_the_other_spelling(self):
+        """Фамилии в одну букву, поэтому запрет должен сам пояснять разницу."""
+        reason = r.ban_reason("Зетрикс")
+        self.assertIn("ЗИТРАКС", reason)
+        self.assertIn("выдать можно", reason)
+
+    def test_notice_lines_fit_terminal(self):
+        """Пометка не должна уезжать за 80 колонок построчно."""
+        for name in r.BANNED:
+            for line in r.ban_reason(name).split("\n"):
+                self.assertLessEqual(len(line), 80, line)
+
 
 class TestUpdate(unittest.TestCase):
     """Проверка обновлений: без сети работает, лишних запросов не делает."""

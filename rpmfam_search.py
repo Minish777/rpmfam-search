@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.1.4"
+__version__ = "1.1.5"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -73,10 +73,13 @@ RE_PASSPORT_OK = re.compile(r"^RPM-[0-9A-Za-z]{4,}$", re.I)
 # Пока фамилия есть в документе, запрет показывается. Уберут фамилию из
 # документа — предупреждение исчезнет само, запись можно будет удалить.
 # ВАЖНО: сравнение строгое, без нечёткого. «Зитракс» и «Зетрикс» —
-# разные фамилии в одну букву, запрет только на «Зетрикс».
+# разные фамилии в одну букву, запрет только на «Зетрикс». Поэтому в самой
+# пометке проговаривается, что имелась в виду другая фамилия.
 BANNED: dict = {
     "Зетрикс": "ЗАБАНЕНО, больше не выдавать. Ответил skyfall_, "
-               "команда RPM ROLEPLAY",
+               "команда RPM ROLEPLAY\n"
+               "Запрещён именно ЗЕТРИКС (с «е»).\n"
+               "ЗИТРАКС (с «и») — выдать можно.",
 }
 
 
@@ -617,7 +620,10 @@ def print_entry(e: dict, entries_list, depth: int = 0, seen=None, links=None,
 
     banned = ban_reason(e["name"])
     if banned:
-        print(f"{pad}  {C.red(C.bold('⛔ ' + banned))}")
+        lines = banned.split("\n")
+        print(f"{pad}  {C.red(C.bold('⛔ ' + lines[0]))}")
+        for extra in lines[1:]:
+            print(f"{pad}     {C.yellow(extra)}")
 
     people = [p for b in e["blocks"] for p in b["people"]]
     heads = [p for p in people if p["role"] == ROLE_HEAD]
