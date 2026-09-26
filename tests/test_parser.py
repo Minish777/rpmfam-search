@@ -6,12 +6,15 @@
 """
 
 import os
+import tempfile
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import rpmfam_search as r  # noqa: E402
+
+SUGGESTED = r.SUGGESTED_DOC_ID
 
 FIXTURE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "fixtures", "sample.txt")
@@ -252,6 +255,7 @@ class TestValidation(unittest.TestCase):
 
 
 class TestDocId(unittest.TestCase):
+
     def test_full_url(self):
         self.assertEqual(
             r.extract_doc_id(
@@ -310,3 +314,90 @@ class TestSnapshot(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestFirstRun(unittest.TestCase):
+    """Пока документ не выбран, утилита работать не должна."""
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in
+                       ("XDG_CONFIG_HOME", "XDG_CACHE_HOME")}
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["XDG_CONFIG_HOME"] = os.path.join(self.tmp.name, "conf")
+        os.environ["XDG_CACHE_HOME"] = os.path.join(self.tmp.name, "cache")
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self.tmp.cleanup()
+
+    def test_no_doc_means_no_context(self):
+        self.assertIsNone(r.resolve_context()["doc_id"])
+
+    def test_blocked_without_doc(self):
+        """Любая команда без документа обязана падать с кодом 2."""
+        quiet = open(os.devnull, "w")
+        old = sys.stdout
+        sys.stdout = quiet
+        try:
+            for args in ([], ["Амброус"], ["--all"], ["--check"], ["-r", "Амброус"]):
+                self.assertEqual(r.main(args), 2, args)
+        finally:
+            sys.stdout = old
+            quiet.close()
+
+    def test_help_works_without_doc(self):
+        quiet = open(os.devnull, "w")
+        old = sys.stdout
+        sys.stdout = quiet
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                r.main(["-h"])
+        finally:
+            sys.stdout = old
+            quiet.close()
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_doc_flag_works_without_doc(self):
+        quiet = open(os.devnull, "w")
+        old = sys.stdout
+        sys.stdout = quiet
+        try:
+            self.assertEqual(r.main(["--doc"]), 0)
+        finally:
+            sys.stdout = old
+            quiet.close()
+
+    def test_connect_then_usable(self):
+        r.connect_doc(SUGGESTED, "Тестовый")
+        ctx = r.resolve_context()
+        self.assertEqual(ctx["doc_id"], SUGGESTED)
+        self.assertEqual(ctx["label"], "Тестовый")
+        self.assertTrue(os.path.isfile(ctx["cache"]) or ctx["cache"].endswith(".txt"))
+
+    def test_reset_clears_doc(self):
+        r.connect_doc(SUGGESTED, "Тестовый")
+        quiet = open(os.devnull, "w")
+        old = sys.stdout
+        sys.stdout = quiet
+        try:
+            r.main(["--doc", "reset"])
+        finally:
+            sys.stdout = old
+            quiet.close()
+        self.assertIsNone(r.resolve_context()["doc_id"])
+
+    def test_clean_keeps_config_with_flag(self):
+        r.connect_doc(SUGGESTED, "Тестовый")
+        quiet = open(os.devnull, "w")
+        old = sys.stdout
+        sys.stdout = quiet
+        try:
+            r.main(["--clean", "--keep-config"])
+        finally:
+            sys.stdout = old
+            quiet.close()
+        self.assertIsNotNone(r.resolve_context()["doc_id"])

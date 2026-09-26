@@ -21,9 +21,11 @@ import urllib.request
 
 APP = "rpmfam-search"
 
-# Документ по умолчанию. Переопределяется через --doc или конфиг.
-DEFAULT_DOC_ID = "1a_7aQdGgEZadPHEW7WEq8rIaWDm2lcx4mXs7W-PzAwA"
-DEFAULT_LABEL = "RPM North"
+# Документ не выбирается по умолчанию: на первом запуске утилита сама
+# спрашивает. Этот ID — только предложение в списке при настройке.
+SUGGESTED_DOC_ID = "1a_7aQdGgEZadPHEW7WEq8rIaWDm2lcx4mXs7W-PzAwA"
+SUGGESTED_LABEL = "RPM North"
+
 
 CACHE_TTL = 300          # через сколько секунд кеш считается протухшим
 NEW_WINDOW_DAYS = 7      # окно "новых фамилий" по умолчанию
@@ -800,33 +802,26 @@ def run_check(db: dict, entries_list, ctx: dict) -> int:
 # ---------------------------------------------------------------- --clean
 
 def clean(keep_config: bool) -> int:
-    """Удаляет только свои файлы."""
-    cfg = load_config()
-    doc_ids = {DEFAULT_DOC_ID}
-    if cfg.get("doc_id"):
-        doc_ids.add(cfg["doc_id"])
+    """Удаляет только свои файлы: doc-*.txt, surnames-*.tsv и config.json."""
+    import glob
 
     removed, freed = [], 0
     base = cache_dir()
-    known = {config_path()}
-    for did in doc_ids:
-        known.update(doc_paths(did))
-    for p in sorted(known):
-        if not os.path.isfile(p):
-            continue
-        try:
-            freed += os.path.getsize(p)
-            os.remove(p)
-            removed.append(p)
-        except OSError as e:
-            sys.stderr.write(C.yellow(f"! не удалось удалить {p}: {e}\n"))
-
+    # по префиксам, а не по списку: так чистятся сразу все документы
+    patterns = [os.path.join(base, "doc-*.txt"),
+                os.path.join(base, "surnames-*.tsv")]
     if not keep_config:
-        try:
-            os.remove(config_path())
-            removed.append(config_path())
-        except OSError:
-            pass
+        patterns.append(config_path())
+    for pattern in patterns:
+        for p in sorted(glob.glob(pattern)):
+            if not os.path.isfile(p):
+                continue
+            try:
+                freed += os.path.getsize(p)
+                os.remove(p)
+                removed.append(p)
+            except OSError as e:
+                sys.stderr.write(C.yellow(f"! не удалось удалить {p}: {e}\n"))
 
     # каталоги убираем только после удаления файлов и только если пустые
     for d in (base, config_dir() if not keep_config else None):
@@ -858,19 +853,24 @@ def handle_doc(value: str | None, ctx: dict, name: str | None = None) -> int:
         cfg.pop("doc_id", None)
         cfg.pop("label", None)
         save_config(cfg)
-        print(C.green("Документ сброшен."))
-        print(C.dim(f"Теперь используется документ по умолчанию: {DEFAULT_LABEL}"))
+        print(C.green("Документ отключён."))
+        print(C.dim("Теперь утилита работать не будет — при следующем запуске "
+                    "снова спросит документ."))
+        print(C.dim("Вернуть: rpmfam-search --doc <ссылка>"))
         return 0
 
     if not value:
+        if not cur:
+            print(C.yellow("Документ не подключён."))
+            print(C.dim("подключить: rpmfam-search --doc <ссылка>"))
+            return 0
         print(C.bold("Текущий документ:"))
         print(f"  {C.dim('источник:')} {ctx['label']}")
         print(f"  {C.dim('id:')}       {ctx['doc_id']}")
-        print(f"  {C.dim('откуда:')}   "
-              + ("конфиг " + config_path() if cur else "встроенный по умолчанию"))
+        print(f"  {C.dim('откуда:')}   конфиг {config_path()}")
         print()
-        print(C.dim("задать другой:  rpmfam-search --doc <ссылка>"))
-        print(C.dim("вернуть встроенный:  rpmfam-search --doc reset"))
+        print(C.dim("сменить:  rpmfam-search --doc <ссылка>"))
+        print(C.dim("отключить: rpmfam-search --doc reset"))
         return 0
 
     doc_id = extract_doc_id(value)
@@ -881,17 +881,10 @@ def handle_doc(value: str | None, ctx: dict, name: str | None = None) -> int:
         return 1
 
     print(C.dim(f"проверяю документ {doc_id}…"))
-    try:
-        raw = fetch(doc_id, os.path.join(cache_dir(), f"doc-{doc_id[:12]}.txt"), True)
-    except SystemExit as e:
-        return e.code or 2
-
-    db = parse(raw)
-    problems = registry_problems(db, strict=True)
-    if problems:
-        print(C.red("Это не похоже на реестр фамилий RPM:"))
-        for pr in problems:
-            print("  ! " + pr)
+    db, err = fetch_and_check(doc_id)
+    if err:
+        print(C.red("Этот документ не подходит:"))
+        print("  ! " + err)
         print(C.dim("\nдокумент не подключён, ничего не изменилось"))
         return 1
 
@@ -913,6 +906,14 @@ def handle_doc(value: str | None, ctx: dict, name: str | None = None) -> int:
 # ---------------------------------------------------------------- main
 
 EPILOG = """\
+ПЕРВЫЙ ЗАПУСК
+  Утилита спросит, из какого документа читать фамилии. Пропустить
+  нельзя: пока документ не выбран, ни одна команда не работает —
+  кроме -h, --doc и --clean. Потом выбор запоминается.
+
+  Документ должен быть доступен ВСЕМ, у кого есть ссылка
+  (Google Docs → Доступ → Читатель для всех, у кого есть ссылка).
+
 примеры
   rpmfam-search Амброус      по фамилии (можно часть: Амб)
   rpmfam-search sqW1nz       по нику представителя
@@ -930,7 +931,7 @@ EPILOG = """\
 свой документ
   rpmfam-search --doc                    что подключено
   rpmfam-search --doc <ссылка> --name X  подключить и запомнить
-  rpmfam-search --doc reset              вернуть встроенный
+  rpmfam-search --doc reset              отключить (потом снова спросит)
 
 утилита только читает документ и ничего в нём не меняет.
 Кеш и настройки удаляются командой --clean.
@@ -940,8 +941,10 @@ EPILOG = """\
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog=APP,
-        description="Поиск зарегистрированных фамилий RPM North, их представителей "
-                    "и заместителей. Без аргументов показывает новые фамилии.",
+        description="Поиск зарегистрированных фамилий, их представителей и "
+                    "заместителей. Без аргументов показывает новые фамилии. "
+                    "При первом запуске нужно выбрать документ с фамилиями.",
+
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -970,15 +973,93 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def resolve_context() -> dict:
+    """Документ обязателен: пока он не выбран, работать не с чем."""
     cfg = load_config()
-    doc_id = cfg.get("doc_id") or DEFAULT_DOC_ID
+    doc_id = cfg.get("doc_id")
+    if not doc_id:
+        return {"doc_id": None, "cache": None, "snap": None,
+                "label": "не подключён", "custom": False}
     cache, snap = doc_paths(doc_id)
-    if cfg.get("doc_id"):
-        label = cfg.get("label") or "свой документ"
-    else:
-        label = DEFAULT_LABEL
+    label = cfg.get("label") or "свой документ"
     return {"doc_id": doc_id, "cache": cache, "snap": snap, "label": label,
-            "custom": bool(cfg.get("doc_id"))}
+            "custom": True}
+
+
+def connect_doc(doc_id: str, label: str) -> None:
+    cfg = load_config()
+    cfg["doc_id"] = doc_id
+    cfg["label"] = label
+    save_config(cfg)
+
+
+def fetch_and_check(doc_id: str) -> tuple[dict, str | None]:
+    """Скачивает документ и проверяет, что это реестр фамилий.
+
+    Возвращает (разобранный документ, текст ошибки)."""
+    path = os.path.join(cache_dir(), f"doc-{doc_id[:12]}.txt")
+    try:
+        raw = fetch(doc_id, path, True)
+    except SystemExit:
+        return None, "не удалось скачать документ — нет сети или ссылка закрыта"
+    db = parse(raw)
+    problems = registry_problems(db, strict=True)
+    if problems:
+        return db, "; ".join(problems)
+    return db, None
+
+
+def first_run_setup() -> int:
+    """Первичный выбор документа. Пропустить нельзя — без него нечего искать."""
+    print(C.bold("Первый запуск — нужно выбрать документ с фамилиями."))
+    print()
+    print("Утилита читает реестр из Google Docs. Документ должен быть")
+    print("доступен ВСЕМ, у кого есть ссылка: в Google Docs откройте")
+    print("«Доступ» и поставьте «Читатель для всех, у кого есть ссылка».")
+    print()
+    print("  1 — реестр RPM North (по умолчанию)")
+    print("  q — выйти")
+    print()
+
+    while True:
+        try:
+            raw = input("Вставьте ссылку или ID документа: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 1
+
+        if raw.lower() in ("q", "q!", "exit", "выход", "quit"):
+            print(C.yellow("Пока не выбран документ, утилита не работает."))
+            print(C.dim("Вернуться: rpmfam-search --doc <ссылка>"))
+            return 1
+
+        if raw == "1":
+            doc_id, label = SUGGESTED_DOC_ID, SUGGESTED_LABEL
+        else:
+            doc_id = extract_doc_id(raw)
+            label = norm(raw)[:60] if not raw.startswith("http") else "свой документ"
+
+        if not doc_id:
+            print(C.red("  не понял ссылку. Нужно что-то вроде:"))
+            print(C.dim("    https://docs.google.com/document/d/<ID>/edit"))
+            print(C.dim("    или сам ID"))
+            continue
+
+        print(C.dim("  проверяю документ…"))
+        db, err = fetch_and_check(doc_id)
+        if err:
+            print(C.red("  не подходит: " + err))
+            print(C.dim("  попробуйте другую ссылку или нажмите q для выхода"))
+            print()
+            continue
+
+        connect_doc(doc_id, label)
+        print()
+        print(C.green(f"Готово, подключён документ: {label}"))
+        print(C.dim(f"  фамилий: {len(entries(db))} | сносок: {len(db['notes'])}"))
+        print(C.dim(f"  выбор сохранён в {config_path()}"))
+        print()
+        print(C.dim("Сменить документ: rpmfam-search --doc <ссылка>"))
+        return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -995,6 +1076,19 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.doc is not None:
         return handle_doc(args.doc, ctx, args.name)
+
+    # Документ не выбран — работать не с чем. -h обработан argparse выше,
+    # --doc и --clean уже выше, поэтому сюда попадает всё остальное.
+    if ctx["doc_id"] is None:
+        if not sys.stdin.isatty():
+            sys.stderr.write(C.red(
+                "Документ не подключён — сначала выберите его:\n"
+                "  rpmfam-search --doc <ссылка>\n"))
+            return 2
+        code = first_run_setup()
+        if code:
+            return code
+        ctx = resolve_context()
 
     query = norm(" ".join(args.query))
     try:
