@@ -1,0 +1,96 @@
+name: Сообщение о баге
+description: Утилита выдала не то, что ожидалось, или не запустилась
+title: "[баг] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо, что сообщаете! Заполните, пожалуйста, поля ниже — по ним
+        сразу понятно, что произошло, и не придётся переспрашивать.
+
+  - type: input
+    id: what
+    attributes:
+      label: Что делали?
+      description: Команда целиком, вместе с аргументами. Например `rpmfam-search Амброус`
+      placeholder: rpmfam-search Амброус
+    validations:
+      required: true
+
+  - type: input
+    id: expected
+    attributes:
+      label: Что ожидали увидеть?
+      description: Своими словами, не обязательно точно. «Две строки: представитель и заместитель»
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Что получили на самом деле?
+      description: Вставьте вывод команды целиком, вместе с подвалом — так проще разобраться
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Что сломалось?
+      options:
+        - Данные выводятся неправильно (не та фамилия, не тот человек, потерялись номера)
+        - Фамилия не находится, хотя она есть в документе
+        - Утилита падает с ошибкой
+        - Не запускается / не устанавливается
+        - Другое
+    validations:
+      required: true
+
+  - type: dropdown
+    id: system
+    attributes:
+      label: Где запускаете?
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Другое
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Версия Python
+      description: Команда `python3 --version`
+      placeholder: 3.12.4
+    validations:
+      required: true
+
+  - type: input
+    id: install
+    attributes:
+      label: Как устанавливали?
+      description: pip install, или symlink, или просто запуск файла
+      placeholder: pip install .
+    validations:
+      required: false
+
+  - type: textarea
+    id: check
+    attributes:
+      label: Вывод `rpmfam-search --check`
+      description: >
+        Показывает, не потерялись ли сноски при разборе. Очень помогает
+        понять, чья именно часть сломалась — утилиты или документ.
+      render: shell
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Что-то ещё
+      description: Скриншот, ссылка на документ, пример фамилии, на которой ломается
+    validations:
+      required: false
