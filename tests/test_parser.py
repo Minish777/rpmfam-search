@@ -431,3 +431,29 @@ class TestDocumentQuirks(unittest.TestCase):
         self.assertIsNone(r.RE_PASSPORT_OK.match("RPM-ХХХХХХ"))
         self.assertFalse(r.RE_PASSPORT_OK.match("898999"))
         self.assertFalse(r.RE_PASSPORT_OK.match(""))
+
+
+class TestBanned(unittest.TestCase):
+    """Запрет на выдачу: пока фамилия в документе — показываем, убрали — нет."""
+
+    def test_known_ban_found(self):
+        self.assertIn("ЗАБАНЕНО", r.ban_reason("Зетрикс"))
+
+    def test_case_and_space_insensitive(self):
+        for name in ("зетрикс", "ЗЕТРИКС", " Зетрикс "):
+            self.assertIsNotNone(r.ban_reason(name), name)
+
+    def test_other_surname_not_banned(self):
+        for name in ("Амброус", "Зитракс", "Лайт", ""):
+            self.assertIsNone(r.ban_reason(name), name)
+
+    def test_absent_in_fixture_means_no_notice(self):
+        """Пока фамилии нет в документе, пометка не должна нигде появляться."""
+        hits = [e["name"] for e in ES if r.ban_reason(e["name"])]
+        self.assertEqual(hits, [])
+
+    def test_notice_appears_if_surname_present(self):
+        with_ban = ES + [{"name": "Зетрикс", "markers": [], "star": False,
+                          "blocks": [], "note": None, "ref": None}]
+        hits = [e["name"] for e in with_ban if r.ban_reason(e["name"])]
+        self.assertEqual(hits, ["Зетрикс"])

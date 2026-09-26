@@ -55,6 +55,22 @@ RE_CAVEAT = re.compile(r"при\s+условии", re.I)
 RE_DIGITS = re.compile(r"^\d{4,}$")
 RE_PASSPORT_OK = re.compile(r"^RPM-[0-9A-Za-z]{4,}$", re.I)
 
+# Временные пометки по отдельным фамилиям: фамилия -> почему нельзя выдавать.
+# Пока фамилия есть в документе, запрет показывается. Уберут фамилию из
+# документа — предупреждение исчезнет само, запись можно будет удалить.
+BANNED: dict = {
+    "Зетрикс": "ЗАБАНЕНО, больше не выдавать. Ответил skyfall_, "
+               "команда RPM ROLEPLAY",
+}
+
+
+def ban_reason(name: str) -> str | None:
+    """Почему фамилию нельзя выдавать, если она запрещена."""
+    for banned, reason in BANNED.items():
+        if key(banned) == key(name):
+            return reason
+    return None
+
 RE_HTML = re.compile(r"<\s*(?:!doctype|html|head|body)\b", re.I)
 RE_DOC_URL = re.compile(r"/d/([a-zA-Z0-9_-]{20,})")
 RE_DOC_ID = re.compile(r"^[a-zA-Z0-9_-]{20,}$")
@@ -583,6 +599,10 @@ def print_entry(e: dict, entries_list, depth: int = 0, seen=None, links=None,
         head += "  " + C.dim(tag)
     print(head)
 
+    banned = ban_reason(e["name"])
+    if banned:
+        print(f"{pad}  {C.red(C.bold('⛔ ' + banned))}")
+
     people = [p for b in e["blocks"] for p in b["people"]]
     heads = [p for p in people if p["role"] == ROLE_HEAD]
     deputies = [p for p in people if p["role"] != ROLE_HEAD]
@@ -821,6 +841,11 @@ def run_check(db: dict, entries_list, ctx: dict) -> int:
     for n in spaced:
         print(C.yellow(f"  ~ в фамилии лишний пробел: \"{n}\" — "
                        f"похоже на опечатку, поиск по склеенному виду не сработает"))
+    banned_here = [e["name"] for e in entries_list if ban_reason(e["name"])]
+    for n in banned_here:
+        print(C.red("  ⛔ запрещено к выдаче: ") + n
+              + C.dim(" — когда фамилию уберут из документа, "
+                      "предупреждение исчезнет само"))
     for n, p in no_prefix:
         print(C.yellow(f"  ~ номер паспорта без префикса: {n} — \"{p}\" "
                        f"(у остальных формат RPM-XXXXXX)"))
@@ -964,8 +989,11 @@ EPILOG = """\
 
 знаки в выводе
   *   подойдёт любой представитель фамилии
-  ⚠   предупреждение из документа
-  ⛔  битая ссылка «относится к фамилии» — правьте у автора документа
+  ⚠   битая ссылка «относится к фамилии» — правьте у автора документа
+  ⛔  фамилию нельзя выдавать (запрет команды)
+
+запреты показываются, только пока фамилия есть в документе.
+Уберут из документа — предупреждение исчезнет само.
 
 свой документ
   rpmfam-search --doc                    что подключено
@@ -1167,23 +1195,29 @@ def main(argv: list[str] | None = None) -> int:
                 cur = head
                 print(f"\n{C.bold(cur)}")
             mark = " " + C.yellow("*") if e["star"] else ""
-            if e.get("ref") and not resolve_ref(entries_list, e["ref"]):
+            if ban_reason(e["name"]):
                 mark += " " + C.red("⛔")
+            elif e.get("ref") and not resolve_ref(entries_list, e["ref"]):
+                mark += " " + C.red("⚠")
             print("  " + e["name"] + mark)
         stars = [e["name"] for e in entries_list if e["star"]]
         broken = [e["name"] for e in entries_list
                   if e.get("ref") and not resolve_ref(entries_list, e["ref"])]
+        banned_here = [e["name"] for e in entries_list if ban_reason(e["name"])]
         print(C.dim(f"\nвсего фамилий: {len(entries_list)}"
                     f" | со звёздочкой: {len(stars)}"
-                    + (f" | битых ссылок: {len(broken)}" if broken else "")))
+                    + (f" | битых ссылок: {len(broken)}" if broken else "")
+                    + (f" | запрещено: {len(banned_here)}" if banned_here else "")))
         if stars:
             print()
             print(C.yellow(C.bold("* — подойдёт любой представитель фамилии"))
                   + C.dim(" (условия выдачи отличаются от обычных)"))
             print(C.dim("  Уточняй у Главы фамилии заранее, до выдачи. "
                         "Фамилии: " + ", ".join(stars)))
+        for n in banned_here:
+            print(C.red("⛔ ") + C.yellow("нельзя выдавать: ") + n)
         if broken:
-            print(C.red("⛔ ") + C.yellow("битая ссылка в документе: ")
+            print(C.yellow("⚠ ") + C.yellow("битая ссылка в документе: ")
                   + ", ".join(broken)
                   + C.dim(" — надо поправить у автора документа"))
         footer(db, ctx)
