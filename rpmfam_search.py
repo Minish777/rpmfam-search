@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -989,20 +989,33 @@ def update_state_path() -> str:
 
 
 def module_dir() -> str:
-    return os.path.dirname(os.path.abspath(__file__))
+    # realpath, а не abspath: утилиту часто запускают через symlink из
+    # ~/.local/bin, и abpath оставил бы нас в каталоге без репозитория
+    return os.path.dirname(os.path.realpath(__file__))
+
+
+def git_root() -> str | None:
+    """Ближайший каталог с .git, если утилита поставлена из репозитория."""
+    d = module_dir()
+    while True:
+        if os.path.isdir(os.path.join(d, ".git")) or \
+                os.path.isfile(os.path.join(d, ".git")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
 
 
 def detect_install() -> str:
     """Как утилита установлена: из git или через pip."""
-    d = module_dir()
-    if os.path.isdir(os.path.join(d, ".git")) or \
-            os.path.isfile(os.path.join(os.path.dirname(d), ".git")):
+    if git_root():
         return "git"
-    parent = os.path.basename(os.path.dirname(d))
+    d = module_dir().replace("\\", "/")
+    parent = os.path.basename(os.path.dirname(module_dir()))
     if parent.endswith(".dist-info") or parent.endswith(".egg-info"):
         return "pip"
-    # pip ставит скрипт отдельно, но модуль лежит в site-packages
-    if "site-packages" in d.replace("\\", "/") or "dist-packages" in d:
+    if "site-packages" in d or "dist-packages" in d:
         return "pip"
     return "unknown"
 
@@ -1081,15 +1094,17 @@ def print_update_notice() -> None:
 
 def perform_update() -> int:
     kind = detect_install()
-    print(C.bold(f"Обновление {APP} с {__version__}") + C.dim(f"  ({kind}-установка)"))
+    print(C.bold(f"Обновление {APP} с {__version__}")
+          + C.dim(f"  ({kind}-установка)"))
     print()
 
     sys.stdout.flush()   # иначе вывод subprocess перемешается с нашим
 
     if kind == "git":
-        d = module_dir()
-        if not os.path.isdir(os.path.join(d, ".git")):
-            d = os.path.dirname(d)
+        d = git_root()
+        if not d:
+            print(C.red("  Каталог репозитория не найден."))
+            return 1
         print(C.dim(f"  git -C {d} pull --ff-only"))
         code = subprocess.call(["git", "-C", d, "pull", "--ff-only"])
     elif kind == "pip":
@@ -1103,6 +1118,7 @@ def perform_update() -> int:
         print(C.dim(f"  или заново: pip install --upgrade "
                     f"git+https://github.com/{REPO}.git@main"))
         return 1
+
 
     print()
     if code == 0:
@@ -1193,7 +1209,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="с --clean не трогать подключённый документ")
     ap.add_argument("-u", "--update", action="store_true",
                     help="обновить утилиту до последней версии")
-    ap.add_argument("-V", "--version", action="version",
+    ap.add_argument("-V", "-v", "--version", action="version",
                     version=f"{APP} {__version__}")
     ap.add_argument("--no-color", action="store_true", help="без цветов")
     return ap
@@ -1434,7 +1450,7 @@ def run(argv: list[str] | None = None) -> int:
 
 # Команды, после которых уведомление об обновлении показывать не нужно:
 # они либо и так служебные, либо вывод уходит в пайп.
-QUIET_NOTICE = {"-h", "--help", "--clean", "-u", "--update", "--version"}
+QUIET_NOTICE = {"-h", "--help", "--clean", "-u", "--update", "--version", "-v", "-V"}
 
 
 def main(argv: list[str] | None = None) -> int:

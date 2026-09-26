@@ -519,3 +519,37 @@ class TestUpdate(unittest.TestCase):
     def test_notice_suppressed_for_service_flags(self):
         for flag in ("-h", "--help", "--clean", "-u", "--update", "--version"):
             self.assertIn(flag, r.QUIET_NOTICE, flag)
+
+
+class TestUpdateDetection(unittest.TestCase):
+    """Регрессии из реальной установки, а не из теории."""
+
+    def test_symlinked_launcher_resolves(self):
+        """Через symlink в ~/.local/bin обновление должно работать.
+
+        Реальный баг: module_dir() брал abspath и оставался в каталоге
+        symlink, где нет .git, поэтому -u отвечал «unknown-установка».
+        """
+        self.assertTrue(r.git_root(), "каталог репозитория не найден")
+        self.assertEqual(r.detect_install(), "git")
+
+    def test_git_root_contains_module(self):
+        root = r.git_root()
+        self.assertTrue(os.path.isfile(os.path.join(root, "rpmfam_search.py")))
+
+    def test_version_flags(self):
+        for flag in ("-v", "-V", "--version"):
+            quiet = open(os.devnull, "w")
+            old = sys.stdout
+            sys.stdout = quiet
+            try:
+                with self.assertRaises(SystemExit) as cm:
+                    r.main([flag])
+            finally:
+                sys.stdout = old
+                quiet.close()
+            self.assertEqual(cm.exception.code, 0, flag)
+
+    def test_version_flags_quiet(self):
+        for flag in ("-v", "-V"):
+            self.assertIn(flag, r.QUIET_NOTICE, flag)
