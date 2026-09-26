@@ -51,8 +51,8 @@ class TestUtils(unittest.TestCase):
 
 class TestPersonName(unittest.TestCase):
     def test_plain(self):
-        self.assertEqual(r.parse_person_name("Алиса Блэйд-Арч (LenaArch)"),
-                         ("Алиса Блэйд-Арч", "LenaArch"))
+        self.assertEqual(r.parse_person_name("Алиса Тестова-Арч (LenaTest)"),
+                         ("Алиса Тестова-Арч", "LenaTest"))
 
     def test_no_nick(self):
         self.assertEqual(r.parse_person_name("Лээре Макеев-Нейман"),
