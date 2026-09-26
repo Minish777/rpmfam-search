@@ -444,7 +444,17 @@ class TestBanned(unittest.TestCase):
             self.assertIsNotNone(r.ban_reason(name), name)
 
     def test_other_surname_not_banned(self):
-        for name in ("Амброус", "Зитракс", "Лайт", ""):
+        for name in ("Амброус", "Лайт", ""):
+            self.assertIsNone(r.ban_reason(name), name)
+
+    def test_similar_name_not_banned(self):
+        """Зитракс и Зетрикс — разные фамилии, различаются одной буквой.
+
+        Запрет только на «Зетрикс», «Зитракс» выдавать можно. Сравнение
+        строгое, намеренно: нечёткое здесь опасно.
+        """
+        self.assertIsNotNone(r.ban_reason("Зетрикс"))
+        for name in ("Зитракс", "ЗИТРАКС", "Зитрекс", "Зетр"):
             self.assertIsNone(r.ban_reason(name), name)
 
     def test_absent_in_fixture_means_no_notice(self):
