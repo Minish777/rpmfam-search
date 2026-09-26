@@ -7,6 +7,9 @@
 
 import os
 import tempfile
+import time
+import urllib.error
+import urllib.request
 import sys
 import unittest
 
@@ -605,3 +608,92 @@ class TestVersionCompare(unittest.TestCase):
     def test_no_version_not_pending(self):
         self.assertFalse(r.update_pending(None))
         self.assertFalse(r.update_pending(""))
+
+
+class TestFetchResilience(unittest.TestCase):
+    """Сеть моргает и лежит — утилита обязана выдавать результат."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self._saved = os.environ.get("XDG_CACHE_HOME")
+        os.environ["XDG_CACHE_HOME"] = os.path.join(self.tmp.name, "cache")
+        self._real = urllib.request.urlopen
+        self.attempts = []
+        self._sleep = time.sleep
+        time.sleep = lambda *_: None      # не ждать в тестах
+
+    def tearDown(self):
+        urllib.request.urlopen = self._real
+        time.sleep = self._sleep
+        if self._saved is None:
+            os.environ.pop("XDG_CACHE_HOME", None)
+        else:
+            os.environ["XDG_CACHE_HOME"] = self._saved
+        self.tmp.cleanup()
+
+    def _boom(self, *a, **kw):
+        self.attempts.append(1)
+        raise urllib.error.URLError("соединение оборвалось")
+
+    def _ok(self, *a, **kw):
+        self.attempts.append(1)
+        payload = SAMPLE.encode("utf-8")
+
+        class R:
+            def read(self, *_):
+                return payload
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                return False
+        return R()
+
+    def test_retries_then_succeeds(self):
+        """Моргнуло и ожило: повтор спасает, кеш не понадобился."""
+        urllib.request.urlopen = self._boom
+        doc = os.path.join(self.tmp.name, "d.txt")
+        r._write_private(doc, SAMPLE)
+        state = {"n": 0}
+
+        def flaky(*a, **kw):
+            state["n"] += 1
+            if state["n"] < 3:
+                return self._boom()
+            return self._ok()
+
+        urllib.request.urlopen = flaky
+        self.assertIn("Амброус", r.fetch("id", doc, True))
+        self.assertEqual(len(self.attempts), 3)
+
+    def test_all_attempts_fail_falls_back_to_cache(self):
+        urllib.request.urlopen = self._boom
+        doc = os.path.join(self.tmp.name, "d.txt")
+        r._write_private(doc, SAMPLE)
+        self.assertIn("Амброус", r.fetch("id", doc, True))
+        self.assertEqual(len(self.attempts), r.FETCH_ATTEMPTS)
+
+    def test_breaker_opens_and_shortens_next_try(self):
+        """После неудач второй запуск не должен ждать все попытки."""
+        urllib.request.urlopen = self._boom
+        doc = os.path.join(self.tmp.name, "d.txt")
+        r._write_private(doc, SAMPLE)
+        r.fetch("id", doc, True)
+        self.assertTrue(r.net_is_down())
+        self.attempts.clear()
+        r.fetch("id", doc, True)
+        self.assertEqual(len(self.attempts), 1, "предохранитель не сработал")
+
+    def test_success_clears_breaker(self):
+        doc = os.path.join(self.tmp.name, "d.txt")
+        r._write_private(doc, SAMPLE)
+        r.mark_net_down()
+        self.assertTrue(r.net_is_down())
+        urllib.request.urlopen = self._ok
+        r.fetch("id", doc, True)
+        self.assertFalse(r.net_is_down(), "сеть ожила, предохранитель не сброшен")
+
+    def test_format_age(self):
+        self.assertEqual(r.format_age(30), "30 секунд")
+        self.assertEqual(r.format_age(300), "5 минут")
+        self.assertEqual(r.format_age(7200), "2 часов")
+        self.assertEqual(r.format_age(259200), "3 дней")

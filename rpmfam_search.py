@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.1.5"
+__version__ = "1.2.0"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -245,6 +245,42 @@ def extract_doc_id(value: str) -> str | None:
 
 # ---------------------------------------------------------------- загрузка
 
+FETCH_ATTEMPTS = 3
+FETCH_TIMEOUT = 10
+FETCH_TIMEOUT_SHORT = 3     # проба пока сеть считается лежащей
+NET_BREAKER_COOLDOWN = 900   # после неудач не лезем в сеть 15 минут
+
+
+def netfail_path() -> str:
+    return os.path.join(cache_dir(), "netfail")
+
+
+def net_is_down() -> bool:
+    """Недавно была неудача — значит сеть, скорее всего, ещё не ожила.
+
+    Без этого утилита на каждом запуске ждала бы все попытки, а это
+    полминуты на команду, когда интернета нет.
+    """
+    try:
+        return time.time() - os.path.getmtime(netfail_path()) < NET_BREAKER_COOLDOWN
+    except OSError:
+        return False
+
+
+def mark_net_up() -> None:
+    try:
+        os.remove(netfail_path())
+    except OSError:
+        pass
+
+
+def mark_net_down() -> None:
+    try:
+        _write_private(netfail_path(), "")
+    except OSError:
+        pass
+
+
 def fetch(doc_id: str, path: str, force: bool = False) -> str:
     if not force and os.path.isfile(path):
         if time.time() - os.path.getmtime(path) < CACHE_TTL:
@@ -253,21 +289,51 @@ def fetch(doc_id: str, path: str, force: bool = False) -> str:
 
     url = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
     req = urllib.request.Request(url, headers={"User-Agent": f"{APP}/1.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            raw = resp.read().decode("utf-8-sig", errors="replace")
-    except urllib.error.URLError as e:
+
+    # после недавних неудач ходим один раз и недолго: моргнуть может и так,
+    # но ждать полминуты на каждой команде при лежащей сети нельзя
+    down = net_is_down()
+    attempts = 1 if down else FETCH_ATTEMPTS
+    timeout = FETCH_TIMEOUT_SHORT if down else FETCH_TIMEOUT
+    last = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8-sig", errors="replace")
+            mark_net_up()
+            break
+        except urllib.error.URLError as e:
+            last = e
+            if attempt < attempts:
+                sys.stderr.write(C.dim("  попытка не удалась, повторяю…\n"))
+                time.sleep(0.7)
+    else:
+        mark_net_down()
         if os.path.isfile(path):
+            age = int(time.time() - os.path.getmtime(path))
             sys.stderr.write(C.yellow(
-                f"! не удалось обновить документ ({e.reason}), беру кеш\n"))
+                f"! документ недоступен ({last.reason}), "
+                f"кешу {format_age(age)}\n"))
             with open(path, encoding="utf-8-sig") as f:
                 return f.read()
-        sys.stderr.write(C.red(f"! не удалось загрузить документ: {e.reason}\n"))
-        sys.stderr.write(C.dim("  проверь ссылку: rpmfam-search --doc <ссылка>\n"))
+        sys.stderr.write(C.red(f"! не удалось загрузить документ: {last.reason}\n"))
+        sys.stderr.write(C.dim("  проверить: rpmfam-search --doc <ссылка>\n"))
         raise SystemExit(2)
 
     _write_private(path, raw)
     return raw
+
+
+def format_age(seconds: int) -> str:
+    """Человеческий возраст кеша: «5 минут», «2 часа», «3 дня»."""
+    if seconds < 90:
+        return f"{max(seconds, 1)} секунд"
+    if seconds < 5400:
+        return f"{seconds // 60} минут"
+    if seconds < 172800:
+        return f"{seconds // 3600} часов"
+    return f"{seconds // 86400} дней"
 
 
 def fetched_at(path: str) -> str:
@@ -892,7 +958,7 @@ def clean(keep_config: bool) -> int:
     # по префиксам, а не по списку: так чистятся сразу все документы
     patterns = [os.path.join(base, "doc-*.txt"),
                 os.path.join(base, "surnames-*.tsv"),
-                update_state_path()]
+                update_state_path(), netfail_path()]
     if not keep_config:
         patterns.append(config_path())
     for pattern in patterns:
@@ -1174,6 +1240,10 @@ EPILOG = """\
   rpmfam-search              новые фамилии за неделю
   rpmfam-search --all        весь список по алфавиту
   rpmfam-search --check      проверить, что данные разобрались верно
+
+двойные фамилии ищутся так же, как обычные:
+  rpmfam-search Блэйд-Арч   найдёт фамилию Арч
+  rpmfam-search Хёдо         найдёт Вендеркольт, Вейл и Гроуз разом
   rpmfam-search -u           обновить утилиту
 
 знаки в выводе
