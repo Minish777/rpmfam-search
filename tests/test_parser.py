@@ -427,7 +427,7 @@ class TestDocumentQuirks(unittest.TestCase):
     def test_passport_format(self):
         self.assertTrue(r.RE_PASSPORT_OK.match("RPM-879252"))
         self.assertTrue(r.RE_PASSPORT_OK.match("rpm-879252"))
-        # кириллические Х — это заглушка, а не номер
+        # кириллические Х — не настоящий номер, а «пока неизвестно»
         self.assertIsNone(r.RE_PASSPORT_OK.match("RPM-ХХХХХХ"))
         self.assertFalse(r.RE_PASSPORT_OK.match("898999"))
         self.assertFalse(r.RE_PASSPORT_OK.match(""))

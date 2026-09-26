@@ -772,14 +772,14 @@ def run_check(db: dict, entries_list, ctx: dict) -> int:
     # огрехи самого документа: не ломают утилиту, но их надо чинить
     # автору. Находим автоматически, чтобы не искать руками.
     spaced = [e["name"] for e in entries_list if suspicious_spaced(e["name"])]
-    no_prefix, placeholder = [], []
+    no_prefix, unknown_num = [], []
     for e in entries_list:
         for b in e["blocks"]:
             for p in b["people"]:
                 num = p.get("passport")
                 if not num or RE_PASSPORT_OK.match(num):
                     continue
-                (placeholder if num.upper().startswith("RPM-") else no_prefix) \
+                (unknown_num if num.upper().startswith("RPM-") else no_prefix) \
                     .append((e["name"], num))
 
     print(C.bold("Проверка целостности данных"))
@@ -824,12 +824,12 @@ def run_check(db: dict, entries_list, ctx: dict) -> int:
     for n, p in no_prefix:
         print(C.yellow(f"  ~ номер паспорта без префикса: {n} — \"{p}\" "
                        f"(у остальных формат RPM-XXXXXX)"))
-    for n, p in placeholder:
-        print(C.yellow(f"  ~ вместо номера паспорта заглушка: {n} — \"{p}\" "
-                       f"(похоже, номер не заполнили)"))
+    for n, p in unknown_num:
+        print(C.yellow(f"  ~ номер паспорта пока неизвестен: {n} — \"{p}\"; "
+                       f"утилита с таким не поможет, уточняйте у автора"))
     if not problems:
         print(C.green("  всё в порядке, данные разобраны без потерь"))
-    elif not (broken or spaced or no_prefix or placeholder):
+    elif not (broken or spaced or no_prefix or unknown_num):
         print(C.dim("  огрехов в самом документе не найдено"))
     return 1 if problems else 0
 
