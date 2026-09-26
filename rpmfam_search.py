@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import difflib
 import json
 import os
@@ -24,13 +25,17 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
-RAW_URL = f"https://raw.githubusercontent.com/{REPO}/main/rpmfam_search.py"
+# Через API, а не raw.githubusercontent.com: raw отдаётся из CDN и может
+# показывать старую версию даже с cache-busting, а API всегда свежий.
+API_FILE_URL = (f"https://api.github.com/repos/{REPO}/contents/"
+                f"rpmfam_search.py?ref=main")
 UPDATE_INTERVAL = 12 * 3600   # как часто проверять обновления
 RE_VERSION = re.compile(r'^__version__\s*=\s*["\'](.+?)["\']', re.M)
+
 
 SUGGESTED_DOC_ID = "1a_7aQdGgEZadPHEW7WEq8rIaWDm2lcx4mXs7W-PzAwA"
 SUGGESTED_LABEL = "RPM North"
@@ -1005,13 +1010,14 @@ def detect_install() -> str:
 def fetch_latest_version(timeout: float = 8.0) -> str | None:
     """Версия из последней версии файла на GitHub. None — не смогли."""
     try:
-        req = urllib.request.Request(RAW_URL,
-                                     headers={"User-Agent": f"{APP}/{__version__}"})
+        req = urllib.request.Request(
+            API_FILE_URL, headers={"User-Agent": f"{APP}/{__version__}"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            head = resp.read(4096).decode("utf-8", errors="replace")
-    except (urllib.error.URLError, OSError, ValueError):
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        text = base64.b64decode(payload["content"]).decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError):
         return None
-    m = RE_VERSION.search(head)
+    m = RE_VERSION.search(text)
     return m.group(1) if m else None
 
 
@@ -1077,6 +1083,8 @@ def perform_update() -> int:
     kind = detect_install()
     print(C.bold(f"Обновление {APP} с {__version__}") + C.dim(f"  ({kind}-установка)"))
     print()
+
+    sys.stdout.flush()   # иначе вывод subprocess перемешается с нашим
 
     if kind == "git":
         d = module_dir()
