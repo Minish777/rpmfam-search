@@ -553,3 +553,29 @@ class TestUpdateDetection(unittest.TestCase):
     def test_version_flags_quiet(self):
         for flag in ("-v", "-V"):
             self.assertIn(flag, r.QUIET_NOTICE, flag)
+
+
+class TestVersionCompare(unittest.TestCase):
+    """Регрессия: утилита предлагала обновиться НА СТАРУЮ версию."""
+
+    def test_parse_version(self):
+        self.assertEqual(r.parse_version("1.2.3"), (1, 2, 3))
+        self.assertEqual(r.parse_version("1.10.0"), (1, 10, 0))
+        self.assertEqual(r.parse_version(""), (0,))
+        self.assertEqual(r.parse_version(None), (0,))
+
+    def test_newer_remote_pending(self):
+        self.assertTrue(r.update_pending("99.0.0"))
+        self.assertTrue(r.update_pending("1.1.3"))
+
+    def test_same_version_not_pending(self):
+        self.assertFalse(r.update_pending(r.__version__))
+
+    def test_older_remote_not_pending(self):
+        """Откат на сервере или устаревший кэш не должны просить обновиться."""
+        for older in ("0.0.1", "1.0.0", "1.1.0", "1.1"):
+            self.assertFalse(r.update_pending(older), older)
+
+    def test_no_version_not_pending(self):
+        self.assertFalse(r.update_pending(None))
+        self.assertFalse(r.update_pending(""))

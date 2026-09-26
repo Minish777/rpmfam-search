@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -1064,22 +1064,36 @@ def check_update(force: bool = False) -> str | None:
     """
     state = load_update_state()
     now = int(time.time())
-    if not force and now - int(state.get("checked", 0)) < UPDATE_INTERVAL:
+    fresh = int(state.get("checked", 0))
+    # Кэш хранит версию, против которой сравнивали. Если локальная версия
+    # с тех пор изменилась (например, сделали git pull вручную) — прошлый
+    # результат больше не имеет смысла и проверку надо повторить.
+    stale = state.get("local") != __version__
+
+    if not force and not stale and now - fresh < UPDATE_INTERVAL:
         return state.get("latest") or None
 
     latest = fetch_latest_version()
     if latest is None:
         return state.get("latest") or None
-    state = {"checked": now, "latest": latest, "known": state.get("known", latest)}
-    if latest != state.get("known"):
-        # новая версия, о ней ещё не сообщали — запомним, что сообщили
-        state["known"] = latest
-    save_update_state(state)
+    save_update_state({"checked": now, "latest": latest, "local": __version__})
     return latest
 
 
+def parse_version(v: str | None) -> tuple:
+    """Версия как кортеж чисел, чтобы сравнивать, а не просто на неравенство."""
+    return tuple(int(p) for p in re.findall(r"\d+", v or "")) or (0,)
+
+
 def update_pending(latest: str | None) -> bool:
-    return bool(latest) and latest != __version__
+    """Обновление нужно только если удалённая версия НОВЕЕ местной.
+
+    Строгое «больше», а не «не равно»: иначе при откате версии на сервере
+    или устаревшем кэше утилита предлагала бы «обновиться» назад.
+    """
+    if not latest:
+        return False
+    return parse_version(latest) > parse_version(__version__)
 
 
 def print_update_notice() -> None:
