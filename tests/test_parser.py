@@ -565,15 +565,19 @@ class TestVersionCompare(unittest.TestCase):
         self.assertEqual(r.parse_version(None), (0,))
 
     def test_newer_remote_pending(self):
+        # строим версию заведомо новее текущей, а не хардкодим число
+        major, minor, patch = r.parse_version(r.__version__)
+        newer = f"{major}.{minor}.{patch + 1}"
+        self.assertTrue(r.update_pending(newer))
         self.assertTrue(r.update_pending("99.0.0"))
-        self.assertTrue(r.update_pending("1.1.3"))
 
     def test_same_version_not_pending(self):
         self.assertFalse(r.update_pending(r.__version__))
 
     def test_older_remote_not_pending(self):
         """Откат на сервере или устаревший кэш не должны просить обновиться."""
-        for older in ("0.0.1", "1.0.0", "1.1.0", "1.1"):
+        major, minor, patch = r.parse_version(r.__version__)
+        for older in ("0.0.1", f"{major}.{minor}.{max(patch - 1, 0)}"):
             self.assertFalse(r.update_pending(older), older)
 
     def test_no_version_not_pending(self):
