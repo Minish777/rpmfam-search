@@ -14,6 +14,7 @@ import difflib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -23,6 +24,14 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
+__version__ = "1.1.0"
+
+# репозиторий, откуда берём обновления
+REPO = "Minish777/rpmfam-search"
+RAW_URL = f"https://raw.githubusercontent.com/{REPO}/main/rpmfam_search.py"
+UPDATE_INTERVAL = 12 * 3600   # как часто проверять обновления
+RE_VERSION = re.compile(r'^__version__\s*=\s*["\'](.+?)["\']', re.M)
+
 SUGGESTED_DOC_ID = "1a_7aQdGgEZadPHEW7WEq8rIaWDm2lcx4mXs7W-PzAwA"
 SUGGESTED_LABEL = "RPM North"
 
@@ -869,7 +878,8 @@ def clean(keep_config: bool) -> int:
     base = cache_dir()
     # по префиксам, а не по списку: так чистятся сразу все документы
     patterns = [os.path.join(base, "doc-*.txt"),
-                os.path.join(base, "surnames-*.tsv")]
+                os.path.join(base, "surnames-*.tsv"),
+                update_state_path()]
     if not keep_config:
         patterns.append(config_path())
     for pattern in patterns:
@@ -967,6 +977,138 @@ def handle_doc(value: str | None, ctx: dict, name: str | None = None) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- обновления
+
+def update_state_path() -> str:
+    return os.path.join(cache_dir(), "update.json")
+
+
+def module_dir() -> str:
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def detect_install() -> str:
+    """Как утилита установлена: из git или через pip."""
+    d = module_dir()
+    if os.path.isdir(os.path.join(d, ".git")) or \
+            os.path.isfile(os.path.join(os.path.dirname(d), ".git")):
+        return "git"
+    parent = os.path.basename(os.path.dirname(d))
+    if parent.endswith(".dist-info") or parent.endswith(".egg-info"):
+        return "pip"
+    # pip ставит скрипт отдельно, но модуль лежит в site-packages
+    if "site-packages" in d.replace("\\", "/") or "dist-packages" in d:
+        return "pip"
+    return "unknown"
+
+
+def fetch_latest_version(timeout: float = 8.0) -> str | None:
+    """Версия из последней версии файла на GitHub. None — не смогли."""
+    try:
+        req = urllib.request.Request(RAW_URL,
+                                     headers={"User-Agent": f"{APP}/{__version__}"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            head = resp.read(4096).decode("utf-8", errors="replace")
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    m = RE_VERSION.search(head)
+    return m.group(1) if m else None
+
+
+def load_update_state() -> dict:
+    try:
+        with open(update_state_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_update_state(state: dict) -> None:
+    try:
+        _write_private(update_state_path(),
+                       json.dumps(state, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def latest_known() -> str | None:
+    """Последняя известная версия, без похода в сеть."""
+    return load_update_state().get("latest")
+
+
+def check_update(force: bool = False) -> str | None:
+    """Версия, на которую надо обновиться, либо None.
+
+    Сеть дёргается не чаще раза в UPDATE_INTERVAL, чтобы не замедлять
+    каждый запуск. При неудаче возвращаем прошлый известный результат.
+    """
+    state = load_update_state()
+    now = int(time.time())
+    if not force and now - int(state.get("checked", 0)) < UPDATE_INTERVAL:
+        return state.get("latest") or None
+
+    latest = fetch_latest_version()
+    if latest is None:
+        return state.get("latest") or None
+    state = {"checked": now, "latest": latest, "known": state.get("known", latest)}
+    if latest != state.get("known"):
+        # новая версия, о ней ещё не сообщали — запомним, что сообщили
+        state["known"] = latest
+    save_update_state(state)
+    return latest
+
+
+def update_pending(latest: str | None) -> bool:
+    return bool(latest) and latest != __version__
+
+
+def print_update_notice() -> None:
+    latest = check_update()
+    if not update_pending(latest):
+        return
+    print()
+    print(C.yellow(C.bold(f"⤴  Доступно обновление: {__version__} → {latest}"))
+          + C.dim(f"   {REPO}"))
+    print(C.dim("   Обновить: rpmfam-search --update"))
+
+
+def perform_update() -> int:
+    kind = detect_install()
+    print(C.bold(f"Обновление {APP} с {__version__}") + C.dim(f"  ({kind}-установка)"))
+    print()
+
+    if kind == "git":
+        d = module_dir()
+        if not os.path.isdir(os.path.join(d, ".git")):
+            d = os.path.dirname(d)
+        print(C.dim(f"  git -C {d} pull --ff-only"))
+        code = subprocess.call(["git", "-C", d, "pull", "--ff-only"])
+    elif kind == "pip":
+        url = f"git+https://github.com/{REPO}.git@main"
+        print(C.dim(f"  {sys.executable} -m pip install --upgrade {url}"))
+        code = subprocess.call([sys.executable, "-m", "pip", "install",
+                                "--upgrade", url])
+    else:
+        print(C.yellow("  Не понято, как утилита установлена."))
+        print(C.dim(f"  Обновите вручную: git -C {module_dir()} pull --ff-only"))
+        print(C.dim(f"  или заново: pip install --upgrade "
+                    f"git+https://github.com/{REPO}.git@main"))
+        return 1
+
+    print()
+    if code == 0:
+        print(C.green("  Обновлено."))
+        print(C.dim(f"  Проверка версии: python3 -c "
+                    f"'import rpmfam_search; print(rpmfam_search.__version__)'"))
+    else:
+        print(C.red(f"  Не обновилось (код {code})."))
+        print(C.dim("  Если правки в репозитории есть, а pull не помог — "
+                    "проверь, не забыл ли сделать pull, и нет ли "
+                    "незакоммиченных изменений: git status"))
+    return 0 if code == 0 else 1
+
+
 # ---------------------------------------------------------------- main
 
 EPILOG = """\
@@ -986,6 +1128,7 @@ EPILOG = """\
   rpmfam-search              новые фамилии за неделю
   rpmfam-search --all        весь список по алфавиту
   rpmfam-search --check      проверить, что данные разобрались верно
+  rpmfam-search -u           обновить утилиту
 
 знаки в выводе
   *   подойдёт любой представитель фамилии
@@ -994,6 +1137,11 @@ EPILOG = """\
 
 запреты показываются, только пока фамилия есть в документе.
 Уберут из документа — предупреждение исчезнет само.
+
+обновления
+  Утилита сама замечает новые версии и пишет об этом в конце вывода.
+  Ничего не происходит само — обновляться нужно вручную:
+  rpmfam-search --update
 
 свой документ
   rpmfam-search --doc                    что подключено
@@ -1035,6 +1183,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="удалить кеш, историю и настройки")
     ap.add_argument("--keep-config", action="store_true",
                     help="с --clean не трогать подключённый документ")
+    ap.add_argument("-u", "--update", action="store_true",
+                    help="обновить утилиту до последней версии")
+    ap.add_argument("-V", "--version", action="version",
+                    version=f"{APP} {__version__}")
     ap.add_argument("--no-color", action="store_true", help="без цветов")
     return ap
 
@@ -1129,7 +1281,7 @@ def first_run_setup() -> int:
         return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def run(argv: list[str] | None = None) -> int:
     fix_stdio()
     args = build_parser().parse_args(argv)
 
@@ -1138,6 +1290,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.clean:
         return clean(args.keep_config)
+
+    if args.update:
+        return perform_update()
 
     ctx = resolve_context()
 
@@ -1267,6 +1422,25 @@ def main(argv: list[str] | None = None) -> int:
             print_entry(e, entries_list, links=links)
     footer(db, ctx)
     return 0
+
+
+# Команды, после которых уведомление об обновлении показывать не нужно:
+# они либо и так служебные, либо вывод уходит в пайп.
+QUIET_NOTICE = {"-h", "--help", "--clean", "-u", "--update", "--version"}
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    show_notice = not (set(args) & QUIET_NOTICE) and sys.stdout.isatty()
+
+    code = run(args)
+
+    if show_notice:
+        try:
+            print_update_notice()
+        except Exception:      # уведомление не должно ломать выдачу
+            pass
+    return code
 
 
 if __name__ == "__main__":

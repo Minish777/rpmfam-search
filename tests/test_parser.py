@@ -457,3 +457,65 @@ class TestBanned(unittest.TestCase):
                           "blocks": [], "note": None, "ref": None}]
         hits = [e["name"] for e in with_ban if r.ban_reason(e["name"])]
         self.assertEqual(hits, ["Зетрикс"])
+
+
+class TestUpdate(unittest.TestCase):
+    """Проверка обновлений: без сети работает, лишних запросов не делает."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self._saved = {k: os.environ.get(k) for k in
+                       ("XDG_CONFIG_HOME", "XDG_CACHE_HOME")}
+        os.environ["XDG_CONFIG_HOME"] = os.path.join(self.tmp.name, "conf")
+        os.environ["XDG_CACHE_HOME"] = os.path.join(self.tmp.name, "cache")
+        self._real = r.fetch_latest_version
+        self.calls = []
+
+    def tearDown(self):
+        r.fetch_latest_version = self._real
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self.tmp.cleanup()
+
+    def _fake(self, version):
+        def fetch(timeout=8.0):
+            self.calls.append(1)
+            return version
+        r.fetch_latest_version = fetch
+
+    def test_version_present(self):
+        self.assertRegex(r.__version__, r"^\d+\.\d+")
+
+    def test_no_network_no_crash(self):
+        self._fake(None)
+        self.assertIsNone(r.check_update(force=True))
+
+    def test_cached_between_runs(self):
+        """Сеть дёргается не чаще раза в UPDATE_INTERVAL."""
+        self._fake("9.9.9")
+        r.check_update(force=True)
+        self.assertEqual(len(self.calls), 1)
+        for _ in range(5):
+            r.check_update()
+        self.assertEqual(len(self.calls), 1)
+
+    def test_pending_detection(self):
+        self.assertTrue(r.update_pending("9.9.9"))
+        self.assertFalse(r.update_pending(r.__version__))
+        self.assertFalse(r.update_pending(None))
+
+    def test_keeps_last_known_on_failure(self):
+        self._fake("9.9.9")
+        r.check_update(force=True)
+        self._fake(None)
+        self.assertEqual(r.check_update(force=True), "9.9.9")
+
+    def test_detect_install(self):
+        self.assertIn(r.detect_install(), ("git", "pip", "unknown"))
+
+    def test_notice_suppressed_for_service_flags(self):
+        for flag in ("-h", "--help", "--clean", "-u", "--update", "--version"):
+            self.assertIn(flag, r.QUIET_NOTICE, flag)
