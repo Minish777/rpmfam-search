@@ -53,6 +53,8 @@ RE_REF = re.compile(r"относ\w*\s+к\s+(.+?)\s*$", re.I)
 RE_ANYONE = re.compile(r"подойдет\s+любой", re.I)
 RE_CAVEAT = re.compile(r"при\s+условии", re.I)
 RE_DIGITS = re.compile(r"^\d{4,}$")
+RE_PASSPORT_OK = re.compile(r"^RPM-[0-9A-Za-z]{4,}$", re.I)
+
 RE_HTML = re.compile(r"<\s*(?:!doctype|html|head|body)\b", re.I)
 RE_DOC_URL = re.compile(r"/d/([a-zA-Z0-9_-]{20,})")
 RE_DOC_ID = re.compile(r"^[a-zA-Z0-9_-]{20,}$")
@@ -540,6 +542,15 @@ def resolve_ref(entries_list, name):
     return None
 
 
+def suspicious_spaced(name: str) -> bool:
+    """Фамилия с пробелом внутри — почти всегда опечатка в документе.
+
+    «Флоре с» вместо «Флорес». Двойные фамилии через дефис норма, а вот
+    пробел посередине — нет.
+    """
+    return " " in norm(name) and "-" not in name
+
+
 # ---------------------------------------------------------------- вывод
 
 def fmt_person(p: dict) -> str:
@@ -758,6 +769,19 @@ def run_check(db: dict, entries_list, ctx: dict) -> int:
     broken = [(a, r) for a, r in refs if not resolve_ref(entries_list, r)]
     weird = [e["name"] for e in entries_list if "<" in e["name"] or ">" in e["name"]]
 
+    # огрехи самого документа: не ломают утилиту, но их надо чинить
+    # автору. Находим автоматически, чтобы не искать руками.
+    spaced = [e["name"] for e in entries_list if suspicious_spaced(e["name"])]
+    no_prefix, placeholder = [], []
+    for e in entries_list:
+        for b in e["blocks"]:
+            for p in b["people"]:
+                num = p.get("passport")
+                if not num or RE_PASSPORT_OK.match(num):
+                    continue
+                (placeholder if num.upper().startswith("RPM-") else no_prefix) \
+                    .append((e["name"], num))
+
     print(C.bold("Проверка целостности данных"))
     rows = [
         ("источник", ctx["label"]),
@@ -794,8 +818,19 @@ def run_check(db: dict, entries_list, ctx: dict) -> int:
     for a, r in broken:
         print(C.yellow(f"  ~ в документе битая ссылка: {a} → "
                        f"{r} (такой фамилии в списке нет)"))
+    for n in spaced:
+        print(C.yellow(f"  ~ в фамилии лишний пробел: \"{n}\" — "
+                       f"похоже на опечатку, поиск по склеенному виду не сработает"))
+    for n, p in no_prefix:
+        print(C.yellow(f"  ~ номер паспорта без префикса: {n} — \"{p}\" "
+                       f"(у остальных формат RPM-XXXXXX)"))
+    for n, p in placeholder:
+        print(C.yellow(f"  ~ вместо номера паспорта заглушка: {n} — \"{p}\" "
+                       f"(похоже, номер не заполнили)"))
     if not problems:
         print(C.green("  всё в порядке, данные разобраны без потерь"))
+    elif not (broken or spaced or no_prefix or placeholder):
+        print(C.dim("  огрехов в самом документе не найдено"))
     return 1 if problems else 0
 
 
@@ -891,8 +926,12 @@ def handle_doc(value: str | None, ctx: dict, name: str | None = None) -> int:
     cfg["doc_id"] = doc_id
     label = norm(name) if name else None
     if not label:
-        # без подписи показываем что-то читаемое, а не простыню из ссылки
-        label = "свой документ" if value.strip().startswith("http") else norm(value)
+        if cfg.get("doc_id") == doc_id and cfg.get("label"):
+            label = cfg["label"]          # тот же документ — подпись не трогаем
+        elif value.strip().startswith("http"):
+            label = "свой документ"       # не простыню из ссылки
+        else:
+            label = norm(value)
     cfg["label"] = label[:60]
     save_config(cfg)
     print(C.green(f"Готово. Подключён документ: {cfg['label']}"))

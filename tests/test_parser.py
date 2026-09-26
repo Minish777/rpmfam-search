@@ -401,3 +401,33 @@ class TestFirstRun(unittest.TestCase):
             sys.stdout = old
             quiet.close()
         self.assertIsNotNone(r.resolve_context()["doc_id"])
+
+
+class TestDocumentQuirks(unittest.TestCase):
+    """Огрехи самого документа: утилита их не чинит, а должна находить."""
+
+    def test_suspicious_spaced(self):
+        """«Флоре с» вместо «Флорес» — пробел посередине фамилии."""
+        self.assertTrue(r.suspicious_spaced("Флоре с"))
+        self.assertTrue(r.suspicious_spaced("Флоре  с"))
+
+    def test_normal_names_not_flagged(self):
+        for name in ("Сомов(а)", "Флорес", "Калашников(а)", "Акудзато",
+                     "Мацумото", "Роуз-Уинстон", "Макеев-Нейман"):
+            self.assertFalse(r.suspicious_spaced(name), name)
+
+    def test_fixture_has_quirks(self):
+        spaced = [e["name"] for e in ES if r.suspicious_spaced(e["name"])]
+        self.assertIn("Флоре с", spaced)
+        bad = [(e["name"], p["passport"]) for e in ES
+               for b in e["blocks"] for p in b["people"]
+               if p.get("passport") and not r.RE_PASSPORT_OK.match(p["passport"])]
+        self.assertIn(("Холостов", "000193"), bad)
+
+    def test_passport_format(self):
+        self.assertTrue(r.RE_PASSPORT_OK.match("RPM-879252"))
+        self.assertTrue(r.RE_PASSPORT_OK.match("rpm-879252"))
+        # кириллические Х — это заглушка, а не номер
+        self.assertIsNone(r.RE_PASSPORT_OK.match("RPM-ХХХХХХ"))
+        self.assertFalse(r.RE_PASSPORT_OK.match("898999"))
+        self.assertFalse(r.RE_PASSPORT_OK.match(""))
