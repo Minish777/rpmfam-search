@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -837,11 +837,42 @@ def do_search(q: str, entries_list):
     return "contains", contains, persons, numbers
 
 
+SUGGEST_LIMIT = 5
+SUGGEST_RATIO = 0.7        # ниже — уже не опечатка, а мусор
+
+
+def _suggest_score(query: str, name: str) -> float | None:
+    """Насколько вероятно, что name — опечатка вместо query. None — нет."""
+    q, n = key(query), key(name)
+    if not q or not n:
+        return None
+    # опечатка почти не меняет длину: на 1 в коротком слове, на 2 в длинном
+    slack = 1 if len(q) < 5 else 2
+    if abs(len(n) - len(q)) > slack:
+        return None
+    ratio = difflib.SequenceMatcher(None, q, n).ratio()
+    if ratio < SUGGEST_RATIO:
+        return None
+    # Общий префикс важнее всего: опечатка обычно в конце слова, поэтому
+    # «Хейс» -> «Хейз» отсеивается, а «Хейс» -> «Грейс» не проходит.
+    prefix = 0
+    for x, y in zip(q, n):
+        if x != y:
+            break
+        prefix += 1
+    return prefix * 10 + ratio
+
+
 def suggestions(q: str, entries_list) -> list[str]:
-    """Похожие фамилии в исходном регистре, а не в нижнем."""
-    by_key = {key(e["name"]): e["name"] for e in entries_list}
-    return [by_key[m] for m in difflib.get_close_matches(
-        key(q), list(by_key), n=5, cutoff=0.55) if m in by_key]
+    """Похожие фамилии в исходном регистре, лучшие первыми."""
+    scored = []
+    for e in entries_list:
+        score = _suggest_score(q, e["name"])
+        if score is not None:
+            scored.append((score, e["name"]))
+    scored.sort(key=lambda t: (-t[0], len(t[1]), t[1]))
+    return [n for _, n in scored[:SUGGEST_LIMIT]]
+
 
 
 # ---------------------------------------------------------------- история

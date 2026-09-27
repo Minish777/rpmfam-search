@@ -775,3 +775,62 @@ class TestWordStartMatching(unittest.TestCase):
         self.assertTrue(r.script_compatible("Аливе", "аливе"))
         self.assertTrue(r.script_compatible("alive", "aliveshka"))
         self.assertTrue(r.script_compatible("Ambrous", "амброус"))
+
+
+class TestSuggestions(unittest.TestCase):
+    """Подсказки при опечатке: без мусора, верная — первой.
+
+    Свои фамилии, а не из фикстуры: тест не должен зависеть от того,
+    какие фамилии лежат в синтетическом документе.
+    """
+
+    NAMES = ["Хейз", "Грейс", "Дейвис", "Дейви", "Амброус", "Браун",
+             "Брайн", "Алиев", "Алчев", "Столь", "Лайт", "Лайв"]
+
+    def setUp(self):
+        self.es = [{"name": n, "star": False, "blocks": [], "note": None,
+                    "ref": None, "markers": []} for n in self.NAMES]
+
+    def test_typo_gives_exact_answer(self):
+        self.assertEqual(r.suggestions("Хейс", self.es), ["Хейз"])
+        self.assertEqual(r.suggestions("Аливе", self.es), ["Алиев"])
+        self.assertEqual(r.suggestions("Столь", self.es), ["Столь"])
+
+    def test_no_junk_alongside(self):
+        """Раньше к «Хейс» прилетали Грейс и Дейвис."""
+        got = r.suggestions("Хейс", self.es)
+        self.assertNotIn("Грейс", got)
+        self.assertNotIn("Дейвис", got)
+
+    def test_longer_typo_still_suggested(self):
+        """«Амбру» -> «Амброус»: длина отличается на два, послабление нужно."""
+        self.assertIn("Амброус", r.suggestions("Амбру", self.es))
+
+    def test_similar_names_both_shown(self):
+        """Омонимы не отличить — показываем обе, это честно."""
+        got = r.suggestions("Брану", self.es)
+        self.assertIn("Браун", got)
+        self.assertIn("Брайн", got)
+
+    def test_nonsense_gets_nothing(self):
+        for q in ("Амбр", "Фывапр", "ывап", "щщщ"):
+            self.assertEqual(r.suggestions(q, self.es), [], q)
+
+    def test_keeps_original_case(self):
+        for s in r.suggestions("Хейс", self.es):
+            self.assertEqual(s, s.strip())
+            self.assertFalse(s.islower())
+
+    def test_limit_respected(self):
+        for q in ("Лай", "Дейви", "Стол"):
+            self.assertLessEqual(len(r.suggestions(q, self.es)), r.SUGGEST_LIMIT)
+
+    def test_score_rejects_unrelated(self):
+        self.assertIsNone(r._suggest_score("Хейс", "Зоркий"))
+        self.assertIsNone(r._suggest_score("", "Хейз"))
+
+    def test_prefix_wins_over_raw_ratio(self):
+        """«Хейс» и «Грейс» похожи по буквам, но префикс решает."""
+        good = r._suggest_score("Хейс", "Хейз")
+        self.assertIsNotNone(good)
+        self.assertIsNone(r._suggest_score("Хейс", "Грейс"))
