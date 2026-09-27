@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.2.2"
+__version__ = "1.2.3"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -1356,16 +1356,57 @@ EPILOG = """\
 """
 
 
+# Кириллица, визуально неотличимая от латиницы. Нередко `--сheck` набирают
+# с русской «с» — для argparse это незнакомый флаг, и человек не понимает,
+# в чём дело. Меняем такие буквы в названиях флагов на латинские.
+# К самому запросу не прикасаемся: «Арч» должен остаться «Арч».
+HOMOGLYPHS = str.maketrans({
+    "а": "a", "А": "A", "в": "b", "В": "B", "е": "e", "Е": "E",
+    "ё": "e", "Ё": "E", "к": "k", "К": "K", "м": "m", "М": "M",
+    "н": "h", "Н": "H", "о": "o", "О": "O", "р": "p", "Р": "P",
+    "с": "c", "С": "C", "т": "t", "Т": "T", "у": "y", "У": "Y",
+    "х": "x", "Х": "X", "і": "i", "І": "I", "ѕ": "s", "Ѕ": "S",
+})
+
+
+def fix_flags(argv: list[str]) -> list[str]:
+    """Латинские буквы в названиях флагов: --сheck -> --check."""
+    out = []
+    for arg in argv:
+        if len(arg) > 1 and arg.startswith("-"):
+            out.append(arg.translate(HOMOGLYPHS))
+        else:
+            out.append(arg)
+    return out
+
+
+class Parser(argparse.ArgumentParser):
+    """Вместо голого «unrecognized arguments» перечисляет доступные флаги."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        extra = ""
+        if "unrecognized" in message or "invalid choice" in message:
+            flags = []
+            for act in self._actions:
+                if not act.option_strings or act.help == argparse.SUPPRESS:
+                    continue
+                flags.append(act.option_strings[0])
+            extra = (f"\n  доступные флаги: {', '.join(flags)}"
+                     f"\n  подробности: {self.prog} -h\n")
+        self.exit(2, f"{self.prog}: ошибка: {message}\n{extra}")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(
+    ap = Parser(
         prog=APP,
         description="Поиск зарегистрированных фамилий, их представителей и "
                     "заместителей. Без аргументов показывает новые фамилии. "
                     "При первом запуске нужно выбрать документ с фамилиями.",
-
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+
     ap.add_argument("query", nargs="*",
                     help="фамилия, имя, ник, номер паспорта или телефона")
     ap.add_argument("-a", "--all", action="store_true", help="список всех фамилий")
@@ -1633,7 +1674,7 @@ QUIET_NOTICE = {"-h", "--help", "--clean", "-u", "--update", "--version", "-v", 
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
+    args = fix_flags(list(sys.argv[1:] if argv is None else argv))
     show_notice = not (set(args) & QUIET_NOTICE) and sys.stdout.isatty()
 
     code = run(args)

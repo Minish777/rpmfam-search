@@ -834,3 +834,49 @@ class TestSuggestions(unittest.TestCase):
         good = r._suggest_score("Хейс", "Хейз")
         self.assertIsNotNone(good)
         self.assertIsNone(r._suggest_score("Хейс", "Грейс"))
+
+
+class TestFlagTypo(unittest.TestCase):
+    """Клавиатура в русской раскладке: --сheck вместо --check."""
+
+    def test_cyrillic_homoglyphs_fixed(self):
+        self.assertEqual(r.fix_flags(["--сheck"]), ["--check"])
+        self.assertEqual(r.fix_flags(["--аll"]), ["--all"])
+        self.assertEqual(r.fix_flags(["-А"]), ["-A"])
+
+    def test_query_untouched(self):
+        """«Арч» — это Арч, а не Ap4. Флаги чистим, запрос не трогаем."""
+        self.assertEqual(r.fix_flags(["Арч", "Хейс", "Уинстон"]),
+                         ["Арч", "Хейс", "Уинстон"])
+
+    def test_values_of_flags_untouched(self):
+        """Ссылка с кириллицей не должна поехать."""
+        self.assertEqual(r.fix_flags(["--name", "Фамы Юга"]),
+                         ["--name", "Фамы Юга"])
+
+    def test_single_dash_kept(self):
+        self.assertEqual(r.fix_flags(["-"]), ["-"])
+
+    def test_cyrillic_check_flag_actually_runs(self):
+        """Именно тот случай из жалобы: --сheck должен работать."""
+        quiet = open(os.devnull, "w")
+        old_out, old_err = sys.stdout, sys.stderr
+        sys.stdout = sys.stderr = quiet
+        try:
+            code = r.main(["--сheck"])
+        finally:
+            sys.stdout, sys.stderr = old_out, old_err
+            quiet.close()
+        self.assertEqual(code, 0)
+
+    def test_unknown_flag_lists_available(self):
+        """Вместо голого «unrecognized» перечисляем флаги."""
+        quiet = open(os.devnull, "w")
+        old = sys.stderr
+        sys.stderr = quiet
+        try:
+            with self.assertRaises(SystemExit):
+                r.run(["--совсем-не-такой-флаг"])
+        finally:
+            sys.stderr = old
+            quiet.close()
