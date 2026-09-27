@@ -1,8 +1,11 @@
 """Тесты парсера rpmfam-search. Запуск: python -m unittest discover -s tests
 
-Сеть не используется: всё проверяется на fixtures/sample.txt — синтетическом
-документе с теми же граблями, что встречаются в живом (лишние скобки, буллиты,
-склейка абзацев, «относится к», телефоны без пробела).
+Сеть не используется и реальные файлы не трогаются: setUpModule уводит
+XDG_CONFIG_HOME и XDG_CACHE_HOME во временный каталог, так что тесты
+физически не могут испортить настройки и кеш пользователя. Всё проверяется
+на fixtures/sample.txt — синтетическом документе с теми же граблями, что
+встречаются в живом (лишние скобки, буллиты, склейка абзацев, «относится
+к», телефоны без пробела).
 """
 
 import os
@@ -16,6 +19,37 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import rpmfam_search as r  # noqa: E402
+
+# Каталог на время прогона. Переопределяется в setUpModule, а пока —
+# заглушка, чтобы импортируемый модуль ничего не создавал.
+_TMP = tempfile.TemporaryDirectory()
+os.environ["XDG_CONFIG_HOME"] = os.path.join(_TMP.name, "conf")
+os.environ["XDG_CACHE_HOME"] = os.path.join(_TMP.name, "cache")
+
+_REAL_XDG = {k: os.environ.get(k) for k in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME")}
+
+
+def setUpModule():
+    """Весь прогон идёт во временном каталоге."""
+    os.environ["XDG_CONFIG_HOME"] = os.path.join(_TMP.name, "conf")
+    os.environ["XDG_CACHE_HOME"] = os.path.join(_TMP.name, "cache")
+
+
+def tearDownModule():
+    for k, v in _REAL_XDG.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    _TMP.cleanup()
+
+
+def no_net():
+    """Подмена сети: любой запрос падает, чтобы тест не зависел от неё."""
+    def boom(*a, **kw):
+        raise AssertionError("тест полез в сеть")
+    return boom
+
 
 SUGGESTED = r.SUGGESTED_DOC_ID
 
@@ -695,8 +729,8 @@ class TestFetchResilience(unittest.TestCase):
     def test_format_age(self):
         self.assertEqual(r.format_age(30), "30 секунд")
         self.assertEqual(r.format_age(300), "5 минут")
-        self.assertEqual(r.format_age(7200), "2 часов")
-        self.assertEqual(r.format_age(259200), "3 дней")
+        self.assertEqual(r.format_age(7200), "2 часа")
+        self.assertEqual(r.format_age(259200), "3 дня")
 
 
 class TestWordStartMatching(unittest.TestCase):
@@ -858,7 +892,13 @@ class TestFlagTypo(unittest.TestCase):
         self.assertEqual(r.fix_flags(["-"]), ["-"])
 
     def test_cyrillic_check_flag_actually_runs(self):
-        """Именно тот случай из жалобы: --сheck должен работать."""
+        """Именно тот случай из жалобы: --сheck должен работать.
+
+        Сеть подменена: тест проверяет разбор флага, а не доступ к Google.
+        """
+        real = r.fetch
+        r.fetch = lambda *a, **kw: SAMPLE
+        r.connect_doc(SUGGESTED, "тест")
         quiet = open(os.devnull, "w")
         old_out, old_err = sys.stdout, sys.stderr
         sys.stdout = sys.stderr = quiet
@@ -867,6 +907,7 @@ class TestFlagTypo(unittest.TestCase):
         finally:
             sys.stdout, sys.stderr = old_out, old_err
             quiet.close()
+            r.fetch = real
         self.assertEqual(code, 0)
 
     def test_unknown_flag_lists_available(self):
@@ -880,3 +921,69 @@ class TestFlagTypo(unittest.TestCase):
         finally:
             sys.stderr = old
             quiet.close()
+
+
+class TestSuiteIsolation(unittest.TestCase):
+    """Тесты не должны трогать настоящие настройки пользователя.
+
+    README предлагает запускать тесты, значит любой из них обязан быть
+    безопасен: сеть не трогаем, файлы — только во временном каталоге.
+    """
+
+    def test_xdg_pointed_into_temp(self):
+        for k in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
+            self.assertIn(_TMP.name, os.environ.get(k, ""), k)
+
+    def test_no_net_helper_exists(self):
+        """Подмена сети используется тестами загрузки — проверяем, что есть."""
+        self.assertTrue(callable(no_net()))
+
+
+class TestPlurals(unittest.TestCase):
+    """Русские числительные: было «1 часов», «2 дней»."""
+
+    def test_plural_forms(self):
+        self.assertEqual(r.plural(1, "час", "часа", "часов"), "1 час")
+        self.assertEqual(r.plural(2, "час", "часа", "часов"), "2 часа")
+        self.assertEqual(r.plural(5, "час", "часа", "часов"), "5 часов")
+        self.assertEqual(r.plural(11, "час", "часа", "часов"), "11 часов")
+        self.assertEqual(r.plural(21, "час", "часа", "часов"), "21 час")
+        self.assertEqual(r.plural(22, "час", "часа", "часов"), "22 часа")
+        self.assertEqual(r.plural(25, "час", "часа", "часов"), "25 часов")
+        self.assertEqual(r.plural(101, "час", "часа", "часов"), "101 час")
+        self.assertEqual(r.plural(111, "час", "часа", "часов"), "111 часов")
+
+    def test_format_age_reads_naturally(self):
+        cases = {0: "1 секунда", 1: "1 секунда", 5: "5 секунд",
+                 90: "1 минута", 300: "5 минут", 5400: "1 час",
+                 7200: "2 часа", 172800: "2 дня", 259200: "3 дня"}
+        for secs, want in cases.items():
+            self.assertEqual(r.format_age(secs), want, secs)
+
+
+class TestPassportFormats(unittest.TestCase):
+    """Номер ищется в том виде, в каком он записан в документе."""
+
+    def setUp(self):
+        self.es = [{"name": "Тест", "star": False, "markers": [], "ref": None,
+                    "note": None, "blocks": [{"people": [
+                        {"role": "Глава", "name": "Кто-то", "nick": "nick",
+                         "passport": "RPM-910442", "phone": "14882930"}], "note": None}]}]
+
+    def test_variants_accepted(self):
+        for q in ("910442", "RPM-910442", "rpm-910442", "RPM - 910442"):
+            _, _, _, numbers = r.do_search(q, self.es)
+            self.assertTrue(numbers, q)
+            self.assertEqual(numbers[0][1]["passport"], "RPM-910442", q)
+
+    def test_partial_number(self):
+        _, _, _, numbers = r.do_search("9104", self.es)
+        self.assertTrue(numbers)
+
+    def test_phone_still_found(self):
+        _, _, _, numbers = r.do_search("14882930", self.es)
+        self.assertTrue(numbers)
+
+    def test_non_number_not_treated_as_number(self):
+        _, _, _, numbers = r.do_search("Амб", self.es)
+        self.assertEqual(numbers, [])

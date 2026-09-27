@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.2.3"
+__version__ = "1.2.4"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -325,15 +325,26 @@ def fetch(doc_id: str, path: str, force: bool = False) -> str:
     return raw
 
 
+def plural(n: int, one: str, few: str, many: str) -> str:
+    """«1 час», «2 часа», «5 часов» — русские числительные."""
+    if n % 10 == 1 and n % 100 != 11:
+        word = one
+    elif 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        word = few
+    else:
+        word = many
+    return f"{n} {word}"
+
+
 def format_age(seconds: int) -> str:
     """Человеческий возраст кеша: «5 минут», «2 часа», «3 дня»."""
     if seconds < 90:
-        return f"{max(seconds, 1)} секунд"
+        return plural(max(seconds, 1), "секунда", "секунды", "секунд")
     if seconds < 5400:
-        return f"{seconds // 60} минут"
+        return plural(seconds // 60, "минута", "минуты", "минут")
     if seconds < 172800:
-        return f"{seconds // 3600} часов"
-    return f"{seconds // 86400} дней"
+        return plural(seconds // 3600, "час", "часа", "часов")
+    return plural(seconds // 86400, "день", "дня", "дней")
 
 
 def fetched_at(path: str) -> str:
@@ -825,13 +836,15 @@ def do_search(q: str, entries_list):
                     persons.append((e, p))
 
     numbers = []
-    if key(q) and RE_DIGITS.match(key(q)):
+    # номер ищется и как есть, так и с префиксом RPM-, как в документе
+    digits_only = re.sub(r"^rpm\s*-\s*", "", key(q), flags=re.I)
+    if RE_DIGITS.match(digits_only):
         for e in entries_list:
             for b in e["blocks"]:
                 for p in b["people"]:
                     digits = re.sub(r"\D", "", " ".join(
                         filter(None, [p.get("passport") or "", p.get("phone") or ""])))
-                    if key(q) in digits:
+                    if digits_only in digits:
                         numbers.append((e, p))
 
     return "contains", contains, persons, numbers
@@ -1073,8 +1086,10 @@ def clean(keep_config: bool) -> int:
     for p in removed:
         print("  " + C.dim(p))
     print(C.dim(f"  всего {freed // 1024} КБ"))
+    # sys.argv[0] ненадёжен: при запуске как python -c там «-c» или «-».
+    # __file__ всегда указывает на сам модуль.
     print(C.dim("\nСам скрипт не тронут. Удалить его: rm "
-                + os.path.expanduser(sys.argv[0])))
+                + os.path.realpath(__file__)))
     return 0
 
 
