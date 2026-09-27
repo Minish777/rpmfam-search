@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -747,35 +747,91 @@ def footer(db: dict, ctx: dict) -> None:
 
 # ---------------------------------------------------------------- поиск
 
+CYR = re.compile(r"[А-Яа-яЁё]")
+LAT = re.compile(r"[A-Za-z]")
+
+
+def script_compatible(query: str, token: str) -> bool:
+    """Кириллический запрос не должен попадать в латинский ник.
+
+    Транслитерация нужна для обратного: набранное латиницей «Ambrous»
+    обязано находить «Амброус». А вот «Аливе» → «alive» → ник
+    «_aLIVEshka_» — случайное совпадение, и такие находки вредят больше,
+    чем помогают.
+    """
+    q_cyr, q_lat = bool(CYR.search(query)), bool(LAT.search(query))
+    t_cyr, t_lat = bool(CYR.search(token)), bool(LAT.search(token))
+    return not (q_cyr and not q_lat and t_lat and not t_cyr)
+
+
+def matches_at_word_start(query: str, text: str, orig: str | None = None) -> bool:
+    """Запрос встречается в тексте, начинаясь с начала слова.
+
+    Обычный поиск подстроки давал ерунду: транслитерация «Хейс» (heys)
+    сидит внутри «Джейс» (dzheys), и поиск выдавал чужую фамилию. Поэтому
+    совпадение засчитывается только там, где перед запросом не буква и не
+    цифра. Двойные фамилии и дефисы при этом не мешают: дефис — не буква.
+
+    orig — исходный запрос до транслитерации, нужен чтобы отличить
+    кириллицу от латиницы (см. script_compatible).
+    """
+    if not query:
+        return False
+    start = 0
+    while True:
+        pos = text.find(query, start)
+        if pos < 0:
+            return False
+        if pos == 0 or not (text[pos - 1].isalnum()):
+            if orig is not None and not script_compatible(orig,
+                                                          text[pos:pos + len(query)]):
+                start = pos + 1
+                continue
+            return True
+        start = pos + 1
+
+
+def loose_words(text: str) -> str:
+    """Транслитерация с сохранением границ слов.
+
+    loose() склеивает всё в одну строку, и границы слов пропадают — тогда
+    «Ambros» не находил «Амброус». Здесь каждое слово переводится отдельно.
+    """
+    return " ".join(loose(t) for t in re.split(r"[\s\-]+", norm(text)) if t)
+
+
+def text_matches(query: str, text: str) -> bool:
+    """Совпадение запроса с текстом: сначала точно, потом по транслитерации."""
+    text = norm(text)
+    if matches_at_word_start(key(query), key(text)):
+        return True
+    return matches_at_word_start(loose(query), loose_words(text), orig=query)
+
+
 def do_search(q: str, entries_list):
-    nq = key(q)
-    lq = loose(q)
     exact = [e for e in entries_list
-             if key(e["name"]) == nq or (lq and loose(e["name"]) == lq)]
+             if key(e["name"]) == key(q) or (loose(q) and loose(e["name"]) == loose(q))]
     if exact:
         return "surname", exact, [], []
 
-    contains = [e for e in entries_list
-                if (nq and nq in key(e["name"]))
-                or (lq and lq in loose(e["name"]))]
+    contains = [e for e in entries_list if text_matches(q, e["name"])]
 
     persons = []
     for e in entries_list:
         for b in e["blocks"]:
             for p in b["people"]:
-                hay = key(" ".join(filter(None, [p["name"], p.get("nick") or ""])))
-                hayl = loose(" ".join(filter(None, [p["name"], p.get("nick") or ""])))
-                if (nq and nq in hay) or (lq and lq in hayl):
+                who = " ".join(filter(None, [p["name"], p.get("nick") or ""]))
+                if text_matches(q, who):
                     persons.append((e, p))
 
     numbers = []
-    if nq and RE_DIGITS.match(nq):
+    if key(q) and RE_DIGITS.match(key(q)):
         for e in entries_list:
             for b in e["blocks"]:
                 for p in b["people"]:
                     digits = re.sub(r"\D", "", " ".join(
                         filter(None, [p.get("passport") or "", p.get("phone") or ""])))
-                    if nq in digits:
+                    if key(q) in digits:
                         numbers.append((e, p))
 
     return "contains", contains, persons, numbers

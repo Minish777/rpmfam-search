@@ -697,3 +697,81 @@ class TestFetchResilience(unittest.TestCase):
         self.assertEqual(r.format_age(300), "5 минут")
         self.assertEqual(r.format_age(7200), "2 часов")
         self.assertEqual(r.format_age(259200), "3 дней")
+
+
+class TestWordStartMatching(unittest.TestCase):
+    """Регрессия: «Хейс» находил «Джейс» и выдавал чужую фамилию.
+
+    Причина — поиск подстроки после транслитерации: heys сидит внутри
+    dzheys. Совпадение засчитывается только с начала слова.
+    """
+
+    def test_not_inside_a_word(self):
+        self.assertFalse(r.text_matches("Хейс", "Джейс Харт"))
+        self.assertFalse(r.text_matches("хар", "Аки Акулин"))
+
+    def test_word_start_matches(self):
+        self.assertTrue(r.text_matches("Хейз", "Люк Хейз-Блэйд"))
+        self.assertTrue(r.text_matches("Харт", "Джейс Харт"))
+        self.assertTrue(r.text_matches("Хейс", "Джейс Хейс"))
+        self.assertTrue(r.text_matches("Амб", "Винс Амброус"))
+
+    def test_hyphen_is_a_boundary(self):
+        """Дефис — не буква, поэтому части двойной фамилии ищутся отдельно."""
+        self.assertTrue(r.text_matches("Арч", "Алиса Блэйд-Арч"))
+        self.assertTrue(r.text_matches("Хёдо", "Крисоль Вендеркольт-Хёдо"))
+        self.assertTrue(r.text_matches("Блэйд-Арч", "Алиса Блэйд-Арч"))
+
+    def test_full_phrase_spanning_words(self):
+        self.assertTrue(r.text_matches("Винс Амбр", "Винс Амброус"))
+        self.assertTrue(r.text_matches("Алиса Блэйд", "Алиса Блэйд-Арч"))
+
+    def test_query_inside_own_word(self):
+        self.assertFalse(r.text_matches("ейс", "Джейс"))
+        self.assertTrue(r.text_matches("Джейс", "Джейс Харт"))
+
+    def test_transliterated_alphabet(self):
+        self.assertTrue(r.text_matches("Ambrous", "Винс Амброус"))
+        self.assertFalse(r.text_matches("Mbrus", "Винс Амброус"))
+        self.assertFalse(r.text_matches("Ambros", "Винс Амброус"))  # неверная транслитерация
+
+    def test_no_empty_query_match(self):
+        self.assertFalse(r.text_matches("", "Джейс Харт"))
+        self.assertFalse(r.matches_at_word_start("", "что-то"))
+
+    def test_every_surname_finds_itself(self):
+        """Главная гарантия: точное имя всегда находится само по себе."""
+        for e in ES:
+            kind, found, _, _ = r.do_search(e["name"], ES)
+            if kind == "surname":
+                self.assertEqual(found[0]["name"], e["name"])
+            else:
+                self.assertIn(e["name"], {f["name"] for f in found})
+
+    def test_known_false_positive_gone(self):
+        """Конкретный случай из жалобы: «Хейс» не должен давать «Харт»."""
+        kind, found, persons, _ = r.do_search("Хейс", ES)
+        fams = {e["name"] for e in found} | {e["name"] for e, _ in persons}
+        self.assertNotIn("Харт", fams)
+
+    def test_loose_words_keeps_boundaries(self):
+        """loose() склеивает слова, loose_words() — нет. Разница важна."""
+        self.assertEqual(r.loose("Винс Амброус"), "vinsambrous")
+        self.assertEqual(r.loose_words("Винс Амброус"), "vins ambrous")
+        self.assertEqual(r.loose_words("Блэйд-Арч"), "bleyd arch")
+
+    def test_cyrillic_does_not_hit_latin_nick(self):
+        """«Аливе» -> alive -> ник «_aLIVEshka_». Мост только в одну сторону."""
+        self.assertFalse(r.text_matches("Аливе",
+                                        "Волет Гудман-Воронов _aLIVEshka_"))
+
+    def test_latin_still_finds_cyrillic(self):
+        """Обратное направление ломать нельзя: так ищут латиницей."""
+        self.assertTrue(r.text_matches("Ambrous", "Винс Амброус"))
+        self.assertTrue(r.text_matches("Voronov", "Егор Воронов"))
+
+    def test_script_compatible(self):
+        self.assertFalse(r.script_compatible("Аливе", "aliveshka"))
+        self.assertTrue(r.script_compatible("Аливе", "аливе"))
+        self.assertTrue(r.script_compatible("alive", "aliveshka"))
+        self.assertTrue(r.script_compatible("Ambrous", "амброус"))
