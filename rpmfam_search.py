@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.2.4"
+__version__ = "1.2.5"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -230,7 +230,21 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict) -> None:
-    _write_private(config_path(), json.dumps(cfg, ensure_ascii=False, indent=2) + "\n")
+    _write_private(config_path(),
+                   json.dumps(cfg, ensure_ascii=False, indent=2) + "\n")
+
+
+def connect_doc(doc_id: str, label: str) -> str | None:
+    """Запоминает документ. Возвращает текст ошибки или None."""
+    cfg = load_config()
+    cfg["doc_id"] = doc_id
+    cfg["label"] = label
+    try:
+        save_config(cfg)
+    except OSError as e:
+        return f"не смог сохранить настройки: {e.strerror}. " \
+               f"Проверь права на {config_dir()}"
+    return None
 
 
 def extract_doc_id(value: str) -> str | None:
@@ -321,7 +335,14 @@ def fetch(doc_id: str, path: str, force: bool = False) -> str:
         sys.stderr.write(C.dim("  проверить: rpmfam-search --doc <ссылка>\n"))
         raise SystemExit(2)
 
-    _write_private(path, raw)
+    try:
+        _write_private(path, raw)
+    except OSError as e:
+        # Каталог кеша может быть недоступен для записи (залоченный профиль,
+        # права на домашний каталог, диск только для чтения). Данные уже в
+        # памяти — покажем результат, просто не сохранив кеш.
+        sys.stderr.write(C.yellow(
+            f"! не смог сохранить кеш ({e.strerror}), работаю без него\n"))
     return raw
 
 
@@ -1139,18 +1160,21 @@ def handle_doc(value: str | None, ctx: dict, name: str | None = None) -> int:
         print(C.dim("\nдокумент не подключён, ничего не изменилось"))
         return 1
 
-    cfg["doc_id"] = doc_id
-    label = norm(name) if name else None
-    if not label:
+    want_label = norm(name) if name else None
+    if not want_label:
         if cfg.get("doc_id") == doc_id and cfg.get("label"):
-            label = cfg["label"]          # тот же документ — подпись не трогаем
+            want_label = cfg["label"]        # тот же документ — подпись не трогаем
         elif value.strip().startswith("http"):
-            label = "свой документ"       # не простыню из ссылки
+            want_label = "свой документ"     # не простыню из ссылки
         else:
-            label = norm(value)
-    cfg["label"] = label[:60]
-    save_config(cfg)
-    print(C.green(f"Готово. Подключён документ: {cfg['label']}"))
+            want_label = norm(value)
+
+    err = connect_doc(doc_id, want_label[:60])
+    if err:
+        print(C.red(err))
+        print(C.dim("документ не подключён, ничего не изменилось"))
+        return 1
+    print(C.green(f"Готово. Подключён документ: {want_label[:60]}"))
     print(C.dim(f"  фамилий: {len(entries(db))} | сносок: {len(db['notes'])}"))
     print(C.dim(f"  сохранено в {config_path()} — вводить ссылку больше не нужно"))
     if not name:
@@ -1463,13 +1487,6 @@ def resolve_context() -> dict:
             "custom": True}
 
 
-def connect_doc(doc_id: str, label: str) -> None:
-    cfg = load_config()
-    cfg["doc_id"] = doc_id
-    cfg["label"] = label
-    save_config(cfg)
-
-
 def fetch_and_check(doc_id: str) -> tuple[dict, str | None]:
     """Скачивает документ и проверяет, что это реестр фамилий.
 
@@ -1530,7 +1547,14 @@ def first_run_setup() -> int:
             print()
             continue
 
-        connect_doc(doc_id, label)
+        err = connect_doc(doc_id, label)
+        if err:
+            print(C.red("  " + err))
+            print(C.dim("  документ не подключён, ничего не изменилось"))
+            print(C.dim("  попробуйте другую ссылку или нажмите q для выхода"))
+            print()
+            continue
+
         print()
         print(C.green(f"Готово, подключён документ: {label}"))
         print(C.dim(f"  фамилий: {len(entries(db))} | сносок: {len(db['notes'])}"))

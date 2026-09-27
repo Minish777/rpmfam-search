@@ -987,3 +987,100 @@ class TestPassportFormats(unittest.TestCase):
     def test_non_number_not_treated_as_number(self):
         _, _, _, numbers = r.do_search("Амб", self.es)
         self.assertEqual(numbers, [])
+
+
+class TestCrossPlatform(unittest.TestCase):
+    """Пути под каждую платформу и устойчивость к правам на каталоги."""
+
+    def probe(self, plat, env):
+        import ntpath, posixpath
+        old = sys.platform, os.path, os.path.expanduser, dict(os.environ)
+        sys.platform = plat
+        os.path = ntpath if plat == "win32" else posixpath
+        if plat == "win32":
+            os.path.expanduser = lambda p: p.replace("~", r"C:\Users\t")
+        for k in ("APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
+            os.environ.pop(k, None)
+        os.environ.update(env)
+        try:
+            return r.config_dir(), r.cache_dir()
+        finally:
+            sys.platform, os.path, os.path.expanduser, _ = (
+                old[0], old[1], old[2], old[3])
+            os.environ.clear()
+            os.environ.update(old[3])
+
+    def test_windows_uses_appdata(self):
+        c, k = self.probe("win32", {
+            "APPDATA": r"C:\Users\t\AppData\Roaming",
+            "LOCALAPPDATA": r"C:\Users\t\AppData\Local"})
+        self.assertIn("Roaming", c)
+        self.assertIn("Local", k)
+        self.assertIn("rpmfam-search", c)
+        self.assertIn("rpmfam-search", k)
+
+    def test_windows_without_env_falls_back(self):
+        c, k = self.probe("win32", {})
+        self.assertTrue(c.startswith("C:"))
+        self.assertTrue(k.startswith("C:"))
+
+    def test_macos_uses_library_caches(self):
+        _, k = self.probe("darwin", {})
+        self.assertIn("Library", k)
+
+    def test_linux_xdg(self):
+        c, k = self.probe("linux", {"XDG_CONFIG_HOME": "/cfg",
+                                    "XDG_CACHE_HOME": "/cache"})
+        self.assertEqual(c, "/cfg/rpmfam-search")
+        self.assertEqual(k, "/cache/rpmfam-search")
+
+    def test_linux_without_xdg(self):
+        c, k = self.probe("linux", {})
+        self.assertIn("/.config/", c)
+        self.assertIn("/.cache/", k)
+
+    def test_cache_never_in_config(self):
+        """Кеш и настройки — разные каталоги, иначе --clean снесёт оба."""
+        for plat, env in (("win32", {"APPDATA": r"C:\A", "LOCALAPPDATA": r"C:\B"}),
+                          ("darwin", {}),
+                          ("linux", {})):
+            c, k = self.probe(plat, env)
+            self.assertNotEqual(c, k, plat)
+
+    def test_fetch_works_when_cache_unwritable(self):
+        """Каталог может быть только для чтения — результат всё равно нужен."""
+        real = r._write_private
+        r._write_private = lambda *a, **kw: (_ for _ in ()).throw(
+            OSError(13, "Permission denied"))
+        class Resp:
+            def read(self, *_):
+                return SAMPLE.encode()
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                return False
+        real_open = r.urllib.request.urlopen
+        r.urllib.request.urlopen = lambda *a, **kw: Resp()
+        r.mark_net_down()
+        quiet = open(os.devnull, "w")
+        old = sys.stderr
+        sys.stderr = quiet
+        try:
+            got = r.fetch("id", os.path.join(_TMP.name, "нет", "doc.txt"), True)
+        finally:
+            sys.stderr = old
+            quiet.close()
+            r._write_private = real
+            r.urllib.request.urlopen = real_open
+        self.assertIn("Амброус", got)
+
+    def test_connect_doc_reports_write_failure(self):
+        real = r._write_private
+        r._write_private = lambda *a, **kw: (_ for _ in ()).throw(
+            OSError(13, "Permission denied"))
+        try:
+            err = r.connect_doc("id", "метка")
+        finally:
+            r._write_private = real
+        self.assertIsNotNone(err)
+        self.assertIn("прав", err)
