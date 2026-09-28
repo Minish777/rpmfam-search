@@ -1128,3 +1128,54 @@ class TestMatchHighlight(unittest.TestCase):
         self.assertIn("scorpion228337", out)
         self.assertIn("RPM-585807", out)
         self.assertIn("22833799", out)
+
+
+class TestPersonHitOutput(unittest.TestCase):
+    """Вывод находок по людям не должен выдавать семью за ответ."""
+
+    def render(self, query, persons, contains=(), numbers=()):
+        import io, contextlib
+        r.C.on = False
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            r.print_person_hits(query, persons, list(contains), list(numbers), False)
+        r.C.on = True
+        return buf.getvalue()
+
+    def setUp(self):
+        self.entry = {"name": "Йегер", "star": False, "markers": [],
+                      "blocks": [], "note": None, "ref": None}
+        self.person = (self.entry,
+                       {"role": "Глава", "name": "Данила Йегер-Стоун",
+                        "nick": "scorpion228337",
+                        "passport": "RPM-585807", "phone": "22833799"})
+
+    def test_surname_not_registered_is_the_answer(self):
+        """Главное — что выдать нельзя, а не какая семья нашлась."""
+        out = self.render("Стоун", [self.person])
+        self.assertIn("не зарегистрирована", out)
+        self.assertIn("нельзя", out)
+
+    def test_no_answer_shaped_label(self):
+        """Метка «Зарегестрированная фамилия» тут вводит в заблуждение."""
+        out = self.render("Стоун", [self.person])
+        self.assertNotIn("Зарегестрированная фамилия", out)
+
+    def test_matched_word_marked(self):
+        out = self.render("Стоун", [self.person])
+        self.assertIn("[Стоун]", out)
+        self.assertIn("Йегер", out)
+
+    def test_nick_gets_different_wording(self):
+        out = self.render("scorpion228337", [self.person])
+        self.assertNotIn("не зарегистрирована", out)
+        self.assertIn("найден", out)
+
+    def test_surname_vs_nick_detection(self):
+        self.assertTrue(r.looks_like_surname("Стоун"))
+        self.assertFalse(r.looks_like_surname("scorpion228337"))
+        self.assertFalse(r.looks_like_surname("910442"))
+
+    def test_mixed_query_counted_as_surname(self):
+        """Запрос с кириллицей — это про фамилию."""
+        self.assertTrue(r.looks_like_surname("Кингсманн"))

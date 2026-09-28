@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.2.6"
+__version__ = "1.2.7"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -760,18 +760,42 @@ def fmt_person_marked(p: dict, query: str) -> str:
     return who + ("  " + C.dim(" | ".join(extra)) if extra else "")
 
 
+CYR = re.compile(r"[А-Яа-яЁё]")
+LAT = re.compile(r"[A-Za-z]")
+
+
+def looks_like_surname(q: str) -> bool:
+    """Кириллица — значит человек ищет фамилию, а не ник."""
+    return bool(CYR.search(q))
+
+
 def print_person_hits(query: str, persons, contains, numbers, contacts: bool) -> None:
-    """Вывод находок по людям с понятным объяснением, где совпало."""
-    if not contains and not numbers:
-        kinds = {match_kind(query, p) for _, p in persons}
-        where = WHERE[sorted(kinds)[0]] if len(kinds) == 1 else "у представителя"
-        print(C.yellow(f'Фамилия "{query}" в списке зарегистрированных нет.'))
-        print(C.dim(f"  Но нашлась {where}:"))
-    else:
+    """Находки по людям.
+
+    Важно не выдавать найденную семью за ответ на запрос: если фамилии
+    в списке нет, это и есть ответ — выдать её нельзя. Совпадение в
+    двойной фамилии показываем отдельной строкой, а не вместо ответа.
+    """
+    if contains or numbers:
         print(C.bold(f'Найдено по представителю: "{query}"') + "\n")
+        for e, p in persons:
+            print(f'{C.bold("Зарегестрированная фамилия:")} "{e["name"]}"')
+            print(f"  {C.green('Роль:')} {p['role']}  {fmt_person_marked(p, query)}")
+        return
+
+    if looks_like_surname(query):
+        print(C.red(f'Фамилия "{query}" не зарегистрирована — выдать её нельзя.'))
+        kinds = {match_kind(query, p) for _, p in persons}
+        where = WHERE[sorted(kinds)[0]] if len(kinds) == 1 else None
+        if where:
+            print()
+            print(C.dim(f"Совпадение нашлось {where}:"))
+    else:
+        print(C.green(f'Представитель с ником "{query}" найден:') + "\n")
+
     for e, p in persons:
-        print(f'{C.bold("Зарегестрированная фамилия:")} "{e["name"]}"')
-        print(f"  {C.green('Роль:')} {p['role']}  {fmt_person_marked(p, query)}")
+        print(f"  {C.dim('семья')} {C.bold(e['name'])}  —  "
+              f"{p['role']}, {fmt_person_marked(p, query)}")
 
 
 def print_entry(e: dict, entries_list, depth: int = 0, seen=None, links=None,
@@ -853,9 +877,6 @@ def footer(db: dict, ctx: dict) -> None:
 
 
 # ---------------------------------------------------------------- поиск
-
-CYR = re.compile(r"[А-Яа-яЁё]")
-LAT = re.compile(r"[A-Za-z]")
 
 
 def script_compatible(query: str, token: str) -> bool:
