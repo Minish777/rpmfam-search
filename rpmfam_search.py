@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.2.5"
+__version__ = "1.2.6"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -697,6 +697,81 @@ def fmt_person(p: dict) -> str:
     if p.get("phone"):
         extra.append(f"тел. {p['phone']}")
     return who + ("  " + C.dim(" | ".join(extra)) if extra else "")
+
+
+def _find_probe(query: str, text: str) -> int:
+    """Позиция запроса в тексте, -1 если нет. Ищем по нормализованным."""
+    for probe in (norm(query), key(query), loose(query)):
+        if not probe:
+            continue
+        i = key(text).find(key(probe))
+        if i >= 0:
+            return i
+    return -1
+
+
+def mark_match(query: str, text: str | None) -> str | None:
+    """Показывает, какое именно слово совпало: «Данила Йегер-[Стоун]»."""
+    if not text:
+        return None
+    t = norm(text)
+    i = _find_probe(query, t)
+    if i < 0:
+        return t
+    n = len(key(norm(query)) or key(query)) or 1
+    return f"{t[:i]}[{t[i:i + n]}]{t[i + n:]}"
+
+
+def match_kind(query: str, p: dict) -> str:
+    """Где именно совпало: в нике, в фамилии или в имени."""
+    for probe in (key(query), loose(query)):
+        if probe and key(p.get("nick") or "") .find(probe) >= 0:
+            return "нике"
+
+    nk = key(p["name"])
+    for probe in (key(query), loose(query)):
+        if not probe or probe not in nk:
+            continue
+        # совпадение в начале слова: слово после пробела или дефиса —
+        # это фамилия, иначе имя
+        before = nk.split(probe)[0]
+        return "фамилии" if before.endswith(("-",)) or " " in before else "имени"
+    return "имени"
+
+
+WHERE = {"фамилии": "в фамилии представителя",
+         "нике": "в нике представителя",
+         "имени": "в имени представителя"}
+
+
+def fmt_person_marked(p: dict, query: str) -> str:
+    """То же, что fmt_person, но с подсвеченным совпадением."""
+    name = mark_match(query, p["name"]) or p["name"]
+    who = f'"{name}'
+    if p.get("nick"):
+        nick = mark_match(query, p["nick"])
+        who += f" ({nick})" if nick else f" ({p['nick']})"
+    who += '"'
+    extra = []
+    if p.get("passport"):
+        extra.append(p["passport"])
+    if p.get("phone"):
+        extra.append(f"тел. {p['phone']}")
+    return who + ("  " + C.dim(" | ".join(extra)) if extra else "")
+
+
+def print_person_hits(query: str, persons, contains, numbers, contacts: bool) -> None:
+    """Вывод находок по людям с понятным объяснением, где совпало."""
+    if not contains and not numbers:
+        kinds = {match_kind(query, p) for _, p in persons}
+        where = WHERE[sorted(kinds)[0]] if len(kinds) == 1 else "у представителя"
+        print(C.yellow(f'Фамилия "{query}" в списке зарегистрированных нет.'))
+        print(C.dim(f"  Но нашлась {where}:"))
+    else:
+        print(C.bold(f'Найдено по представителю: "{query}"') + "\n")
+    for e, p in persons:
+        print(f'{C.bold("Зарегестрированная фамилия:")} "{e["name"]}"')
+        print(f"  {C.green('Роль:')} {p['role']}  {fmt_person_marked(p, query)}")
 
 
 def print_entry(e: dict, entries_list, depth: int = 0, seen=None, links=None,
@@ -1683,17 +1758,14 @@ def run(argv: list[str] | None = None) -> int:
         print(C.bold(f'Найдено по номеру: "{query}"') + "\n")
         for e, p in numbers:
             print(f'{C.bold("Зарегестрированная фамилия:")} "{e["name"]}"')
-            print(f"  {C.green('Роль:')} {p['role']}  {fmt_person(p)}")
+            print(f"  {C.green('Роль:')} {p['role']}  {fmt_person_marked(p, query)}")
         if not contains and not persons:
             footer(db, ctx)
             return 0
         print()
 
     if persons and (args.contacts or not contains):
-        print(C.bold(f'Найдено по представителю: "{query}"') + "\n")
-        for e, p in persons:
-            print(f'{C.bold("Зарегестрированная фамилия:")} "{e["name"]}"')
-            print(f"  {C.green('Роль:')} {p['role']}  {fmt_person(p)}")
+        print_person_hits(query, persons, contains, numbers, args.contacts)
         if not contains:
             footer(db, ctx)
             return 0

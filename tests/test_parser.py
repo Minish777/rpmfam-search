@@ -1084,3 +1084,47 @@ class TestCrossPlatform(unittest.TestCase):
             r._write_private = real
         self.assertIsNotNone(err)
         self.assertIn("прав", err)
+
+
+class TestMatchHighlight(unittest.TestCase):
+    """Показываем, где именно совпало: «Данила Йегер-[Стоун]»."""
+
+    def setUp(self):
+        self.person = {"role": "Глава", "name": "Данила Йегер-Стоун",
+                       "nick": "scorpion228337", "passport": "RPM-585807",
+                       "phone": "22833799"}
+        self.nick_person = {"role": "Глава", "name": "Винс Амброус",
+                            "nick": "sqW1nz", "passport": None, "phone": None}
+
+    def test_marks_matched_word(self):
+        self.assertEqual(r.mark_match("Стоун", self.person["name"]),
+                         "Данила Йегер-[Стоун]")
+
+    def test_marks_with_capital_letter(self):
+        """Раньше заглавная «Х» не находилась в нижнем регистре."""
+        self.assertEqual(r.mark_match("Хёдо", "Крисоль Вендеркольт-Хёдо"),
+                         "Крисоль Вендеркольт-[Хёдо]")
+
+    def test_marks_nick(self):
+        self.assertEqual(r.mark_match("sqW1nz", self.nick_person["nick"]),
+                         "[sqW1nz]")
+
+    def test_no_match_returns_plain(self):
+        self.assertEqual(r.mark_match("Зоркий", self.person["name"]),
+                         self.person["name"])
+
+    def test_empty_text(self):
+        self.assertIsNone(r.mark_match("Стоун", None))
+
+    def test_match_kind(self):
+        self.assertEqual(r.match_kind("Стоун", self.person), "фамилии")
+        self.assertEqual(r.match_kind("Йегер", self.person), "фамилии")
+        self.assertEqual(r.match_kind("sqW1nz", self.nick_person), "нике")
+        self.assertEqual(r.match_kind("Винс", self.nick_person), "имени")
+
+    def test_marked_person_keeps_all_data(self):
+        out = r.fmt_person_marked(self.person, "Стоун")
+        self.assertIn("[Стоун]", out)
+        self.assertIn("scorpion228337", out)
+        self.assertIn("RPM-585807", out)
+        self.assertIn("22833799", out)
