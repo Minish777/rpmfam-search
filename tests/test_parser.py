@@ -8,6 +8,8 @@ XDG_CONFIG_HOME и XDG_CACHE_HOME во временный каталог, так
 к», телефоны без пробела).
 """
 
+import contextlib
+import io
 import os
 import tempfile
 import time
@@ -1179,3 +1181,93 @@ class TestPersonHitOutput(unittest.TestCase):
     def test_mixed_query_counted_as_surname(self):
         """Запрос с кириллицей — это про фамилию."""
         self.assertTrue(r.looks_like_surname("Кингсманн"))
+
+
+def full_report(query, entries=ES):
+    """Прогоняет запрос через main() и возвращает текст вывода."""
+    buf = io.StringIO()
+    saved = sys.argv
+    sys.argv = [r.APP, "--no-color", query]
+    try:
+        with contextlib.redirect_stdout(buf):
+            try:
+                r.main()
+            except SystemExit:
+                pass
+    finally:
+        sys.argv = saved
+    return buf.getvalue()
+
+
+class TestOutputFormatting(unittest.TestCase):
+    """Оформление вывода: опечатки, выравнивание, понятные сообщения."""
+
+    def test_no_typo_in_registered_word(self):
+        """«Зарегестрированная» было написано в коде и в README."""
+        src = open(r.__file__, encoding="utf-8").read()
+        self.assertNotIn("регестрирован", src)
+        self.assertIn("Зарегистрированная фамилия:", src)
+
+    def test_footer_labels_aligned(self):
+        out = full_report("Амброус")
+        rows = [l for l in out.splitlines()
+                if l.startswith(("обновлён:", "данные от:", "источник:"))]
+        self.assertEqual(len(rows), 3, rows)
+        # Выравнивание задано от начала строки, а не от двоеточия:
+        # метки разной длины, поэтому замерять надо позицию значения.
+        starts = set()
+        for line in rows:
+            tail = line.split(":", 1)[1]
+            starts.add(line.index(":") + 1 + len(tail) - len(tail.lstrip()))
+        self.assertEqual(len(starts), 1, f"значения не выровнены: {rows}")
+
+    def test_footer_survives_missing_date(self):
+        """Без даты в документе футер не должен падать."""
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            r.footer({}, {"cache": None, "label": "свой документ"})
+        out = buf.getvalue()
+        self.assertIn("неизвестно", out)
+        self.assertIn("свой документ", out)
+
+    def test_not_found_says_what_was_searched(self):
+        out = full_report("Кингсманн")
+        self.assertIn("Не найдено", out)
+        self.assertIn("искали:", out)
+        self.assertIn("раскладку", out)
+
+    def test_suggestion_is_highlighted_as_separate_block(self):
+        out = full_report("Кингсманн")
+        self.assertIn("похожее в базе", out)
+        self.assertNotIn("Фамилия \"Кингсманн\" не зарегистрирована", out)
+
+    def test_help_all_russian(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), self.assertRaises(SystemExit):
+            r.build_parser().parse_args(["-h"])
+        out = buf.getvalue()
+        self.assertIn("эта справка", out)
+        self.assertIn("версия утилиты", out)
+        self.assertNotIn("show this help message", out)
+        self.assertNotIn("show program's version", out)
+
+    def test_help_keeps_service_flags_documented(self):
+        """Служебные флаги скрыты из списка, но описаны внизу справки."""
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), self.assertRaises(SystemExit):
+            r.build_parser().parse_args(["-h"])
+        out = buf.getvalue()
+        for flag in ("--check", "--clean", "--keep-config", "--refresh"):
+            self.assertIn(flag, out, flag)
+
+    def test_service_flags_still_parse(self):
+        ap = r.build_parser()
+        for argv in (["--check"], ["--clean"], ["--keep-config"],
+                     ["--doc"], ["--doc", "reset"], ["-r"], ["-u"]):
+            args = ap.parse_args(argv)
+            self.assertIsNotNone(args, argv)
+
+    def test_cyrillic_doc_flag_works(self):
+        """--dос с русской «о» должен работать, как и раньше."""
+        args = r.build_parser().parse_args(r.fix_flags(["--dос", "reset"]))
+        self.assertEqual(args.doc, "reset")

@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.2.7"
+__version__ = "1.2.8"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -369,6 +369,8 @@ def format_age(seconds: int) -> str:
 
 
 def fetched_at(path: str) -> str:
+    if not path:
+        return "неизвестно"
     try:
         return time.strftime("%d.%m.%Y %H:%M", time.localtime(os.path.getmtime(path)))
     except OSError:
@@ -779,7 +781,7 @@ def print_person_hits(query: str, persons, contains, numbers, contacts: bool) ->
     if contains or numbers:
         print(C.bold(f'Найдено по представителю: "{query}"') + "\n")
         for e, p in persons:
-            print(f'{C.bold("Зарегестрированная фамилия:")} "{e["name"]}"')
+            print(f'{C.bold("Зарегистрированная фамилия:")} "{e["name"]}"')
             print(f"  {C.green('Роль:')} {p['role']}  {fmt_person_marked(p, query)}")
         return
 
@@ -806,11 +808,11 @@ def print_entry(e: dict, entries_list, depth: int = 0, seen=None, links=None,
     # Звёздочка = условия выдачи отличаются, подходит любой представитель.
     # Показываем в заголовке, чтобы не прочитать по диагонали.
     if e.get("star"):
-        head = (f'{pad}{C.bold("Зарегестрированная фамилия:")} '
+        head = (f'{pad}{C.bold("Зарегистрированная фамилия:")} '
                 f'"{C.bold(e["name"])}"  '
                 f'{C.yellow(C.bold("* подойдёт любой представитель"))}')
     else:
-        head = f'{pad}{C.bold("Зарегестрированная фамилия:")} "{C.bold(e["name"])}"'
+        head = f'{pad}{C.bold("Зарегистрированная фамилия:")} "{C.bold(e["name"])}"'
     if tag:
         head += "  " + C.dim(tag)
     print(head)
@@ -864,16 +866,23 @@ def print_entry(e: dict, entries_list, depth: int = 0, seen=None, links=None,
 
 
 def footer(db: dict, ctx: dict) -> None:
-    print()
-    print(C.dim("─" * 46))
-    print(C.dim(f"Данные актуальны на {fetched_at(ctx['cache'])}"))
-    print(C.dim(f"источник: {ctx['label']}"))
     at, by = db.get("updated_at"), db.get("updated_by")
+    print()
+    updated = "неизвестно"
     if at or by:
-        line = "Документ обновлён: " + (at or "дата не указана")
+        updated = at or "дата не указана"
         if by:
-            line += f" ({by})"
-        print(C.dim(line))
+            updated += f" ({by})"
+    # Метки выровнены по колонке, чтобы даты не уезжали друг за другом.
+    # Отступ считаем от метки вместе с двоеточием, иначе строки разъезжаются
+    # на пробел: «обновлён:» короче «данные от:» ровно на один символ.
+    rows = [("обновлён", updated),
+            ("данные от", fetched_at(ctx["cache"])),
+            ("источник", ctx["label"])]
+    labels = [k + ":" for k, _ in rows]
+    width = max(len(x) for x in labels)
+    for label, (_, value) in zip(labels, rows):
+        print(C.dim(f"{label}{' ' * (width - len(label))} {value}"))
 
 
 # ---------------------------------------------------------------- поиск
@@ -1070,7 +1079,8 @@ def show_new(entries_list, links, snap, fresh, gone, window, first_run, ctx) -> 
     if not recent:
         print(C.dim(f"Новых фамилий с {since} нет."))
     else:
-        print(C.bold(f"Новые фамилии с {since} ({len(recent)}):"))
+        print(C.bold(f"Новые фамилии с {since} — {len(recent)}:"))
+        print()
         for e in sorted(recent, key=lambda x: snap.get(x["name"], 0), reverse=True):
             ts = snap.get(e["name"])
             when = time.strftime("%d.%m.%Y %H:%M", time.localtime(ts)) if ts else "?"
@@ -1446,48 +1456,54 @@ def perform_update() -> int:
 # ---------------------------------------------------------------- main
 
 EPILOG = """\
+ПРИМЕРЫ
+  rpmfam-search Амброус        по фамилии, можно часть: Амб
+  rpmfam-search sqW1nz         по нику представителя
+  rpmfam-search 910442         по номеру паспорта или телефона
+  rpmfam-search Кингсманн      опечатка -> покажет похожие
+  rpmfam-search                новые фамилии за неделю
+  rpmfam-search --all          весь список по алфавиту
+  rpmfam-search --check        проверить, что данные разобрались верно
+
+ДВОЙНЫЕ ФАМИЛИИ ИЩУТСЯ ТАК ЖЕ, КАК ОБЫЧНЫЕ
+  rpmfam-search Блэйд-Арч     найдёт фамилию Арч
+  rpmfam-search Хёдо           найдёт Вендеркольт, Вейл и Гроуз разом
+
+ЗНАКИ В ВЫВОДЕ
+  *    подойдёт любой представитель фамилии
+  ⚠    битая ссылка «относится к фамилии» — правьте у автора документа
+  ⛔   фамилию нельзя выдавать (запрет команды)
+
+  Запреты показываются, только пока фамилия есть в документе.
+  Уберут из документа — предупреждение исчезнет само.
+
+СВОЙ ДОКУМЕНТ
+  rpmfam-search --doc                     что подключено
+  rpmfam-search --doc <ссылка> --name X   подключить и запомнить
+  rpmfam-search --doc reset               отключить
+
+СЛУЖЕБНОЕ
+  --check           проверить, что данные разобрались верно
+  -r, --refresh     обновить кеш принудительно
+  --clean           удалить кеш, историю и настройки
+  --keep-config     с --clean не трогать подключённый документ
+  -V, --version     версия утилиты
+
 ПЕРВЫЙ ЗАПУСК
   Утилита спросит, из какого документа читать фамилии. Пропустить
   нельзя: пока документ не выбран, ни одна команда не работает —
   кроме -h, --doc и --clean. Потом выбор запоминается.
 
   Документ должен быть доступен ВСЕМ, у кого есть ссылка
-  (Google Docs → Доступ → Читатель для всех, у кого есть ссылка).
+  (Google Docs -> Доступ -> Читатель для всех, у кого есть ссылка).
 
-примеры
-  rpmfam-search Амброус      по фамилии (можно часть: Амб)
-  rpmfam-search sqW1nz       по нику представителя
-  rpmfam-search 910442       по номеру паспорта или телефона
-  rpmfam-search Кингсманн    опечатка -> покажет похожие
-  rpmfam-search              новые фамилии за неделю
-  rpmfam-search --all        весь список по алфавиту
-  rpmfam-search --check      проверить, что данные разобрались верно
-
-двойные фамилии ищутся так же, как обычные:
-  rpmfam-search Блэйд-Арч   найдёт фамилию Арч
-  rpmfam-search Хёдо         найдёт Вендеркольт, Вейл и Гроуз разом
-  rpmfam-search -u           обновить утилиту
-
-знаки в выводе
-  *   подойдёт любой представитель фамилии
-  ⚠   битая ссылка «относится к фамилии» — правьте у автора документа
-  ⛔  фамилию нельзя выдавать (запрет команды)
-
-запреты показываются, только пока фамилия есть в документе.
-Уберут из документа — предупреждение исчезнет само.
-
-обновления
+ОБНОВЛЕНИЯ
   Утилита сама замечает новые версии и пишет об этом в конце вывода.
   Ничего не происходит само — обновляться нужно вручную:
   rpmfam-search --update
 
-свой документ
-  rpmfam-search --doc                    что подключено
-  rpmfam-search --doc <ссылка> --name X  подключить и запомнить
-  rpmfam-search --doc reset              отключить (потом снова спросит)
-
-утилита только читает документ и ничего в нём не меняет.
-Кеш и настройки удаляются командой --clean.
+  Утилита только читает документ и ничего в нём не меняет.
+  Кеш и настройки удаляются командой --clean.
 """
 
 
@@ -1535,38 +1551,42 @@ class Parser(argparse.ArgumentParser):
 def build_parser() -> argparse.ArgumentParser:
     ap = Parser(
         prog=APP,
-        description="Поиск зарегистрированных фамилий, их представителей и "
-                    "заместителей. Без аргументов показывает новые фамилии. "
-                    "При первом запуске нужно выбрать документ с фамилиями.",
+        description="Поиск зарегистрированных фамилий, их представителей "
+                    "и заместителей. Без аргументов показывает новые фамилии.",
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        add_help=False,
     )
+
+    ap._positionals.title = "что искать"
+    ap._optionals.title = "флаги"
 
     ap.add_argument("query", nargs="*",
                     help="фамилия, имя, ник, номер паспорта или телефона")
     ap.add_argument("-a", "--all", action="store_true", help="список всех фамилий")
-    ap.add_argument("-r", "--refresh", action="store_true", help="обновить кеш")
     ap.add_argument("-c", "--contacts", action="store_true",
                     help="искать только по имени/нику представителя")
     ap.add_argument("-s", "--since", type=int, default=NEW_WINDOW_DAYS, metavar="ДНЕЙ",
                     help="за сколько дней показать новые фамилии "
                          f"(по умолчанию {NEW_WINDOW_DAYS}, 0 — только с прошлого раза)")
-    ap.add_argument("--doc", nargs="?", const="", metavar="ССЫЛКА",
-                    help="показать, подключить или сбросить документ "
-                         "(--doc <ссылка>, --doc reset)")
-    ap.add_argument("--name", metavar="НАЗВАНИЕ",
-                    help="подпись документа при подключении через --doc")
-    ap.add_argument("--check", action="store_true",
-                    help="проверить целостность разобранных данных")
-    ap.add_argument("--clean", action="store_true",
-                    help="удалить кеш, историю и настройки")
-    ap.add_argument("--keep-config", action="store_true",
-                    help="с --clean не трогать подключённый документ")
+    ap.add_argument("-r", "--refresh", action="store_true", help="обновить кеш")
     ap.add_argument("-u", "--update", action="store_true",
                     help="обновить утилиту до последней версии")
+    ap.add_argument("-h", "--help", action="help",
+                    help="эта справка")
     ap.add_argument("-V", "-v", "--version", action="version",
+                    help="версия утилиты",
                     version=f"{APP} {__version__}")
     ap.add_argument("--no-color", action="store_true", help="без цветов")
+
+    # Работают, но описаны в epilog разделом СЛУЖЕБНОЕ. В списке флагов
+    # они были лишними: глаз цепляется за них вместо основных.
+    ap.add_argument("--doc", nargs="?", const="", metavar="ССЫЛКА",
+                    help=argparse.SUPPRESS)
+    ap.add_argument("--name", metavar="НАЗВАНИЕ", help=argparse.SUPPRESS)
+    ap.add_argument("--check", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--clean", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--keep-config", action="store_true", help=argparse.SUPPRESS)
     return ap
 
 
@@ -1768,17 +1788,25 @@ def run(argv: list[str] | None = None) -> int:
     _, contains, persons, numbers = status
 
     if not contains and not persons and not numbers:
-        print(C.red(f'Фамилия "{query}" не зарегистрирована.'))
+        # Что именно искали: слово может быть фамилией, а может ником
+        # или номером. Раньше вывод был одинаковый, и человек гадал.
+        kind = ("фамилия" if looks_like_surname(query) else "запрос")
+        print(C.red(f'Не найдено: "{query}"'))
+        print(C.dim(f"  искали: {kind}"))
         near = suggestions(query, entries_list)
         if near:
-            print(C.dim("похожее: " + ", ".join(near)))
+            print()
+            print(C.dim("  похожее в базе: " + C.cyan(", ".join(near))))
+        print()
+        print(C.dim("  Проверь раскладку клавиатуры: с русской «с» "
+                    "часто набирают латинскую «c»."))
         footer(db, ctx)
         return 1
 
     if numbers:
         print(C.bold(f'Найдено по номеру: "{query}"') + "\n")
         for e, p in numbers:
-            print(f'{C.bold("Зарегестрированная фамилия:")} "{e["name"]}"')
+            print(f'{C.bold("Зарегистрированная фамилия:")} "{e["name"]}"')
             print(f"  {C.green('Роль:')} {p['role']}  {fmt_person_marked(p, query)}")
         if not contains and not persons:
             footer(db, ctx)
