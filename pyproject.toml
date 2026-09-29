@@ -22,4 +22,4 @@ classifiers = [
 rpmfam-search = "rpmfam_search:main"
 
 [tool.setuptools]
-py-modules = ["rpmfam_search"]
+py-modules = ["rpmfam_search", "rpname"]

@@ -8,6 +8,8 @@ XDG_CONFIG_HOME и XDG_CACHE_HOME во временный каталог, так
 к», телефоны без пробела).
 """
 
+import contextlib
+import io
 import os
 import tempfile
 import time
@@ -52,6 +54,7 @@ def no_net():
 
 
 SUGGESTED = r.SUGGESTED_DOC_ID
+_REAL_FOREBEARS = r.forebears_coverage
 
 FIXTURE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "fixtures", "sample.txt")
@@ -1179,3 +1182,132 @@ class TestPersonHitOutput(unittest.TestCase):
     def test_mixed_query_counted_as_surname(self):
         """Запрос с кириллицей — это про фамилию."""
         self.assertTrue(r.looks_like_surname("Кингсманн"))
+
+
+def report(name, entries=ES, use_net=False):
+    """Прогоняет проверку имени и возвращает текст отчёта."""
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        r.print_name_report(name, entries, {}, use_net)
+    return buf.getvalue()
+
+
+class TestNameCheckReport(unittest.TestCase):
+    """Отчёт --check-name собирает правила, реестр и ручную проверку."""
+
+    def test_registered_surname_needs_approval(self):
+        out = report("Винс Амброус")
+        self.assertIn("есть в реестре", out)
+        self.assertIn("Главы или Зама", out)
+        self.assertNotIn("ПАСПОРТ ВЫДАВАТЬ НЕЛЬЗЯ", out)
+
+    def test_double_surname_prefix_is_not_registration(self):
+        """«Тестов» — только начало «Тестова-Арч», регистрации нет.
+
+        Раньше такое ложное срабатывание требовало одобрения Главы
+        на пустом месте.
+        """
+        out = report("Пётр Тестов")
+        self.assertIn("фамилии в реестре нет", out)
+        self.assertNotIn("есть в реестре", out)
+        self.assertNotIn("Главы или Зама", out)
+
+    def test_unknown_surname(self):
+        out = report("Алекс Вендетто")
+        self.assertIn("фамилии в реестре нет", out)
+        self.assertIn("Discord", out)
+
+    def test_ban_blocks_before_anything_else(self):
+        """Запрет в реестре обязан быть в самом верху, а не в хвосте.
+
+        Проверяем на синтетической записи, чтобы тест не зависел от того,
+        есть ли «Зетрикс» в живом документе.
+        """
+        entries = [dict(ES[0], name="Зетрикс")]
+        out = report("Пётр Зетрикс", entries)
+        self.assertIn("ПАСПОРТ ВЫДАВАТЬ НЕЛЬЗЯ", out)
+        self.assertNotIn("Грубых нарушений не найдено", out)
+        head = out[:out.index("ПАСПОРТ")]
+        self.assertNotIn("есть в реестре", head)
+
+    def test_local_rule_blocks(self):
+        out = report("Иван Сукачёв")
+        self.assertIn("ПАСПОРТ ВЫДАВАТЬ НЕЛЬЗЯ", out)
+        self.assertIn("Мат", out)
+
+    def test_clean_name_is_not_a_clean_result(self):
+        """Нет блоков — это не «можно выдавать», а «нарушений не нашли»."""
+        out = report("Алекс Вендетто")
+        self.assertIn("не найдено", out)
+        self.assertIn("Это не разрешение", out)
+
+    def test_manual_checklist_always_present(self):
+        for name in ("Алекс Вендетто", "Иван Сукачёв"):
+            out = report(name)
+            self.assertIn("Что проверить вручную", out)
+            self.assertIn("2000", out)
+
+
+class TestNameCheckNetwork(unittest.TestCase):
+    """Без --forebears сеть не трогается: forebears рейтлимитит."""
+
+    def test_no_forebears_request_by_default(self):
+        r.forebears_coverage = no_net()
+        report("Алекс Вендетто", use_net=False)
+
+    def test_forebears_called_when_asked(self):
+        calls = []
+
+        def fake(kind, word):
+            calls.append((kind, word))
+            return 5000
+        r.forebears_coverage = fake
+        try:
+            report("Алекс Вендетто", use_net=True)
+        finally:
+            r.forebears_coverage = _REAL_FOREBEARS
+        self.assertTrue(calls)
+        self.assertIn(("surnames", "Вендетто"), calls)
+        self.assertIn(("name", "Алекс"), calls)
+
+    def test_low_coverage_blocks(self):
+        r.forebears_coverage = lambda k, w: 10
+        try:
+            out = report("Алекс Вендетто", use_net=True)
+        finally:
+            r.forebears_coverage = _REAL_FOREBEARS
+        self.assertIn("меньше 2000", out)
+
+    def test_unknown_coverage_not_treated_as_low(self):
+        """Пустой ответ сайта — это «не смогли», а не «носителей мало»."""
+        r.forebears_coverage = lambda k, w: None
+        try:
+            out = report("Алекс Вендетто", use_net=True)
+        finally:
+            r.forebears_coverage = _REAL_FOREBEARS
+        self.assertNotIn("меньше 2000", out)
+        self.assertIn("не удалось", out)
+
+
+class TestForebearsUrl(unittest.TestCase):
+    """Путь у фамилий /surnames/, у имён /name/ — не /names/."""
+
+    def test_surnames_path(self):
+        u = r.forebears_url("surnames", "Вендетто")
+        self.assertIn("/surnames/vendetto", u)
+
+    def test_name_path_singular(self):
+        u = r.forebears_url("name", "Алекс")
+        self.assertIn("/name/aleks", u)
+        self.assertNotIn("/names/", u)
+
+
+class TestCleanRemovesForebearsCache(unittest.TestCase):
+    def test_forebears_tsv_deleted(self):
+        cache = r.cache_dir()
+        os.makedirs(cache, exist_ok=True)
+        p = os.path.join(cache, "forebears.tsv")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("surnames:vendetto\t93\n")
+        r.clean(keep_config=True)
+        self.assertFalse(os.path.exists(p))

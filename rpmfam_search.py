@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+from html import unescape
+
 import difflib
 import json
 import os
@@ -19,13 +21,16 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+
+import rpname
 
 APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.2.7"
+__version__ = "1.3.0"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -799,9 +804,9 @@ def print_person_hits(query: str, persons, contains, numbers, contacts: bool) ->
 
 
 def print_entry(e: dict, entries_list, depth: int = 0, seen=None, links=None,
-                tag: str = "") -> None:
+                tag: str = "", indent: str = "") -> None:
     seen = seen or set()
-    pad = "  " * depth
+    pad = indent + "  " * depth
 
     # Звёздочка = условия выдачи отличаются, подходит любой представитель.
     # Показываем в заголовке, чтобы не прочитать по диагонали.
@@ -861,6 +866,183 @@ def print_entry(e: dict, entries_list, depth: int = 0, seen=None, links=None,
             if rel:
                 print(f"{pad}  {C.magenta('Двойные фамилии того же человека:')} "
                       + ", ".join(f'"{r}"' for r in rel))
+
+
+# ---------------------------------------------------------------- РП имя
+
+RULES_BAN = ("Запрет команды. Фраза «а на весте можно», «мне такое выдали» "
+             "и «я раньше так ходил» аргументом не является.")
+
+
+def forebears_url(kind: str, word: str) -> str:
+    """Готовая ссылка на forebears.io: kind — name или surnames."""
+    return f"https://forebears.io/{kind}/{urllib.parse.quote(loose(word))}"
+
+
+def forebears_coverage(kind: str, word: str) -> int | None:
+    """Охват с forebears.io. None — не смогли или сайт не ответил.
+
+    Сайт рейтлимитит и при частых запросах отдаёт пустую страницу, поэтому
+    ответы кэшируются, а отсутствие ответа — это не «мало носителей».
+    """
+    slug = f"{kind}:{loose(word)}"
+    cache = os.path.join(cache_dir(), "forebears.tsv")
+    try:
+        with open(cache, encoding="utf-8") as f:
+            for line in f:
+                k, _, v = line.rstrip("\n").partition("\t")
+                if k == slug:
+                    return int(v)
+    except (OSError, ValueError):
+        pass
+
+    url = f"https://forebears.io/{kind}/{urllib.parse.quote(loose(word))}"
+    req = urllib.request.Request(url, headers={"User-Agent": f"{APP}/{__version__}"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            html = resp.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+    if len(html) < 500:
+        return None
+    text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html, flags=re.S)
+    text = re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", text)))
+    m = re.search(r"Approximately\s+([\d,]+)\s+people bear this (?:surname|name)", text)
+    if not m:
+        return None
+    value = int(m.group(1).replace(",", ""))
+
+    try:
+        lines = []
+        if os.path.isfile(cache):
+            with open(cache, encoding="utf-8") as f:
+                lines = [x for x in f.read().split("\n") if x]
+        lines = [x for x in lines if not x.startswith(slug + "\t")]
+        lines.append(f"{slug}\t{value}")
+        _write_private(cache, "\n".join(lines) + "\n")
+    except OSError:
+        pass
+    return value
+
+
+def print_name_report(raw: str, entries_list, links, use_net: bool) -> int:
+    clean = rpname.clean_name(raw)
+    findings = rpname.check_name(raw)
+
+    # --- реестр: запреты и одобрение Главы --------------------------------
+    parts = [p for p in re.split(r"\s+", clean) if p]
+    surname = parts[1] if len(parts) > 1 else ""
+    hits: list = []
+    near: list = []
+    if surname and entries_list:
+        _, found, persons, _ = do_search(surname, entries_list)
+        # Зарегистрирована только точное совпадение фамилии. «Тестов» — это
+        # начало «Тестова-Арч» из двойной фамилии, а не своя фамилия,
+        # и одобрение Главы для неё не нужно.
+        key = surname.casefold()
+        hits = [e for e in found if e["name"].casefold() == key]
+        if not hits:
+            near = sorted({e["name"] for e in found}
+                          | {e["name"] for e, _ in persons})
+
+    for e in hits:
+        reason = ban_reason(e["name"])
+        if reason:
+            findings.insert(0, rpname.Finding(
+                "block", f"Фамилия «{e['name']}» запрещена",
+                reason, RULES_BAN))
+
+    blocks = [f for f in findings if f.level == "block"]
+    warns = [f for f in findings if f.level == "warn"]
+    oks = [f for f in findings if f.level == "ok"]
+
+    print(C.bold("═" * 58))
+    print(C.bold(f" Проверка РП имени: {clean or raw}"))
+    print(C.bold("═" * 58))
+    print()
+
+    if blocks:
+        print(C.red(C.bold(f" ✗ ПАСПОРТ ВЫДАВАТЬ НЕЛЬЗЯ — "
+                           f"нарушений: {len(blocks)}")))
+        print()
+        for f in blocks:
+            print(f"  {C.red('✗')} {C.bold(f.title)}")
+            for line in f.detail.split("\n"):
+                print(f"     {C.yellow(line)}")
+            if f.fix:
+                print(f"     {C.dim('как надо:')} {C.green(f.fix)}")
+            if f.rule:
+                print(f"     {C.dim('правило:')} {f.rule}")
+            print()
+    else:
+        print(C.green(C.bold(" ✓ Грубых нарушений не найдено")))
+        print(C.dim("   Это не разрешение выдать паспорт — см. «что проверить "
+                    "вручную» ниже."))
+        print()
+
+    if warns:
+        for f in warns:
+            print(f"  {C.yellow('⚠')} {C.bold(f.title)}")
+            if f.detail:
+                print(f"     {C.yellow(f.detail)}")
+            if f.rule:
+                print(f"     {C.dim('правило:')} {f.rule}")
+            print()
+
+    if oks:
+        print(C.dim(" ——— что проверено и в порядке ———"))
+        for f in oks:
+            print(f"  {C.green('✓')} {C.dim(f.title)}")
+        print()
+
+    if hits:
+        print(C.yellow(C.bold(" ⚠ фамилия есть в реестре зарегистрированных")))
+        print()
+        for e in {e["name"]: e for e in hits}.values():
+            print_entry(e, entries_list, links=links, indent="   ")
+        print(C.dim("   Без личного присутствия Главы или Зама главы и его "
+                    "одобрения не выдавать."))
+        print(C.dim("   Фразы «а мне на весте такое дали», «это моё старое "
+                    "имя» — не аргумент."))
+        print()
+    elif surname:
+        if not near and entries_list:
+            near = suggestions(surname, entries_list)
+        print(C.yellow(C.bold(" ⚠ фамилии в реестре нет")))
+        if near:
+            print(C.dim("   Похожее в реестре: " + ", ".join(near)
+                        + " — проверь, не та ли фамилия."))
+            print(C.dim("   Совпадение может быть и внутри двойной фамилии, "
+                        "это не регистрация твоей."))
+        print(C.dim("   Проверь Discord-канал 🪪фам-документ: там последние "
+                    "регистрации, которые ещё не в документе."))
+        print()
+
+    # --- что вручную -----------------------------------------------------
+    print(C.bold(" Что проверить вручную"))
+    first = parts[0] if parts else ""
+    if first:
+        print(C.dim("   forebears.io, охват нужен от 2000:"))
+        print(f"     имя      {C.cyan(forebears_url('name', first))}")
+        if use_net:
+            cov = forebears_coverage("name", first)
+            print("     " + (C.green(f"охват: {cov}")
+                             if cov else C.yellow("охват не удалось получить")))
+    if surname:
+        print(C.dim("     фамилия  " + C.cyan(forebears_url("surnames", surname))))
+        if use_net:
+            cov = forebears_coverage("surnames", surname)
+            if cov is None:
+                print("     " + C.yellow("охват не удалось получить"))
+            elif cov < 2000:
+                print(C.red(f"     охват: {cov} — меньше 2000, не выдавать"))
+            else:
+                print(C.green(f"     охват: {cov}"))
+    print(C.dim("   Поисковик: не известная личность, политик, аниме-персонаж."))
+    print(C.dim("   Имя должно звучать естественно, а не редко и вычурно."))
+    print()
+    return 1 if blocks else 0
 
 
 def footer(db: dict, ctx: dict) -> None:
@@ -1175,6 +1357,7 @@ def clean(keep_config: bool) -> int:
     # по префиксам, а не по списку: так чистятся сразу все документы
     patterns = [os.path.join(base, "doc-*.txt"),
                 os.path.join(base, "surnames-*.tsv"),
+                os.path.join(base, "forebears.tsv"),
                 update_state_path(), netfail_path()]
     if not keep_config:
         patterns.append(config_path())
@@ -1566,6 +1749,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="обновить утилиту до последней версии")
     ap.add_argument("-V", "-v", "--version", action="version",
                     version=f"{APP} {__version__}")
+    ap.add_argument("-N", "--check-name", metavar="ИМЯ",
+                    help="проверить РП имя по правилам мерии")
+    ap.add_argument("--forebears", action="store_true",
+                    help="с --check-name: спросить охват на forebears.io")
     ap.add_argument("--no-color", action="store_true", help="без цветов")
     return ap
 
@@ -1711,6 +1898,10 @@ def run(argv: list[str] | None = None) -> int:
 
     if args.check:
         return run_check(db, entries_list, ctx)
+
+    if args.check_name:
+        return print_name_report(args.check_name, entries_list, links,
+                                 args.forebears)
 
     # Без запроса показываем новые фамилии. Пустая строка и пробелы — тоже.
     if not query and not args.all:
