@@ -124,6 +124,18 @@ class TestBannedSurnames(unittest.TestCase):
         for n in ("Иван Московский", "Алекс Питерский", "Пётр Сибирский"):
             self.assertIn("Страна, город или регион вместо фамилии", titles(n), n)
 
+    def test_plants(self):
+        """Растения запрещены наравне с животными: «-N Дерево» проходило."""
+        for n in ("Дерево", "Деревья", "Куст", "Цветок", "Кактус",
+                  "Пётр Берёзов", "Иван Соснов"):
+            self.assertIn("Растение вместо фамилии", titles(n), n)
+
+    def test_plant_like_surnames_not_caught(self):
+        """Растение в начале настоящей фамилии — не повод отказывать."""
+        for n in ("Пётр Деревенко", "Пётр Верещагин", "Иван Лесничий",
+                  "Алекс Кустов"):
+            self.assertEqual(blocked(n), [], n)
+
     def test_roflop(self):
         for n in ("Хрюша Ложкин", "Маньяк Иванов", "Пётр Дураков"):
             self.assertTrue(titles(n), n)
@@ -232,3 +244,37 @@ class TestSurnameOnly(unittest.TestCase):
 
     def test_empty_still_blocks(self):
         self.assertIn("Пустое имя", titles("   "))
+
+
+class TestYoFolding(unittest.TestCase):
+    """Слова с «ё» в списках были мёртвыми.
+
+    Проверка нормализует «ё» -> «е», а списки хранили «жёлтый», «пёс»,
+    «берёза» как есть. Совпадения не происходили никогда: 27 слов
+    лежали без дела, и «-N Дерево» проходило.
+    """
+
+    def test_lists_folded(self):
+        for w in ("жёлтый", "пёс", "берёза", "ёлка", "чёрт", "верёвка"):
+            self.assertIn(w.replace("ё", "е"), rpname.PLANTS_S
+                          | rpname.COLORS_S | rpname.ANIMALS_S
+                          | rpname.ROFLOP_S | rpname.STUFF_S, w)
+
+    def test_yo_words_now_caught(self):
+        # «Пёсов» сюда не входит: «пёс»+«ов» не выводится намеренно,
+        # иначе рубили бы настоящие фамилии вроде Пёсцов и Орлов.
+        for n in ("Пётр Жёлтый", "Пётр Берёзов", "Пётр Чёртов",
+                  "Пётр Клён", "Пётр Орёл"):
+            self.assertTrue(blocked(n), n)
+
+    def test_yofold_does_not_overreach(self):
+        """После «оживления» списков настоящие фамилии не должны пострадать."""
+        for n in ("Пётр Пёсцов", "Пётр Орлов", "Пётр Чертёв",
+                  "Пётр Кленов", "Пётр Верёвкин"):
+            self.assertEqual(blocked(n), [], n)
+
+    def test_key_of_and_words_agree(self):
+        for a, b in (("Ёлка", "Елка"), ("Пёс", "Пес"), ("Чёрт", "Черт")):
+            self.assertEqual(rpname.key_of(a), rpname.key_of(b), a)
+            self.assertIn(rpname.key_of(a).replace("ё", "е"),
+                          rpname._words(a), a)
