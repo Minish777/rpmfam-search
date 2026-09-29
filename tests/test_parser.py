@@ -1311,3 +1311,32 @@ class TestCleanRemovesForebearsCache(unittest.TestCase):
             f.write("surnames:vendetto\t93\n")
         r.clean(keep_config=True)
         self.assertFalse(os.path.exists(p))
+
+
+class TestNameCheckSurnameOnly(unittest.TestCase):
+    """Отчёт при вводе одной фамилии."""
+
+    def test_no_block_and_no_missing_name_claim(self):
+        out = report("Воронов")
+        self.assertNotIn("ПАСПОРТ ВЫДАВАТЬ НЕЛЬЗЯ", out)
+        self.assertNotIn("Нет фамилии", out)
+        self.assertIn("Введена только фамилия", out)
+        self.assertNotIn("Имя в полной форме", out)
+
+    def test_forebears_header_present(self):
+        """Раньше при одной фамилии заголовок вообще не печатался."""
+        out = report("Воронов")
+        self.assertIn("forebears.io", out)
+        self.assertIn("/surnames/voronov", out)
+        self.assertNotIn("/name/", out)
+
+    def test_registered_surname_still_found(self):
+        out = report("Амброус")
+        self.assertIn("есть в реестре", out)
+        self.assertIn("Главы или Зама", out)
+
+    def test_name_checklist_line_hidden_without_name(self):
+        out = report("Воронов")
+        self.assertNotIn("Имя должно звучать естественно", out)
+        out2 = report("Алекс Вендетто")
+        self.assertIn("Имя должно звучать естественно", out2)

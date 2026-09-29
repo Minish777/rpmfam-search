@@ -30,7 +30,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -932,7 +932,8 @@ def print_name_report(raw: str, entries_list, links, use_net: bool) -> int:
 
     # --- реестр: запреты и одобрение Главы --------------------------------
     parts = [p for p in re.split(r"\s+", clean) if p]
-    surname = parts[1] if len(parts) > 1 else ""
+    surname_only = len(parts) == 1
+    surname = parts[0] if surname_only else (parts[1] if len(parts) > 1 else "")
     hits: list = []
     near: list = []
     if surname and entries_list:
@@ -1021,9 +1022,10 @@ def print_name_report(raw: str, entries_list, links, use_net: bool) -> int:
 
     # --- что вручную -----------------------------------------------------
     print(C.bold(" Что проверить вручную"))
-    first = parts[0] if parts else ""
-    if first:
+    first = "" if surname_only else (parts[0] if parts else "")
+    if first or surname:
         print(C.dim("   forebears.io, охват нужен от 2000:"))
+    if first:
         print(f"     имя      {C.cyan(forebears_url('name', first))}")
         if use_net:
             cov = forebears_coverage("name", first)
@@ -1040,7 +1042,8 @@ def print_name_report(raw: str, entries_list, links, use_net: bool) -> int:
             else:
                 print(C.green(f"     охват: {cov}"))
     print(C.dim("   Поисковик: не известная личность, политик, аниме-персонаж."))
-    print(C.dim("   Имя должно звучать естественно, а не редко и вычурно."))
+    if first:
+        print(C.dim("   Имя должно звучать естественно, а не редко и вычурно."))
     print()
     return 1 if blocks else 0
 

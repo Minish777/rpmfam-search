@@ -299,8 +299,11 @@ def check_name(raw: str) -> list[Finding]:
                         "введите имя и фамилию, например: Алекс Вендетто")]
 
     parts = [p for p in re.split(r"\s+", name) if p]
-    first = parts[0] if parts else ""
-    surnames = parts[1:]
+    # Одно слово — это фамилия. Сотрудник чаще приходит именно с ней, и
+    # ругаться «нет фамилии» на «Воронов» бессмысленно.
+    surname_only = len(parts) == 1
+    first = "" if surname_only else (parts[0] if parts else "")
+    surnames = parts if surname_only else parts[1:]
     words = _words(name)
     # склейка всех частей без разделителей: «Цун Дере» -> «цундере»
     glued = "".join(re.findall(r"[a-zа-я]+",
@@ -354,9 +357,12 @@ def check_name(raw: str) -> list[Finding]:
     for part in surnames:
         surname_pieces.extend(x for x in re.split(r"[\-–—]", part) if x)
 
-    if len(parts) < 2:
-        out.append(Finding(BLOCK, "Нет фамилии",
-                           "нужно имя и фамилия, например: Алекс Вендетто"))
+    if surname_only:
+        out.append(Finding(
+            WARN, "Введена только фамилия",
+            f"«{parts[0]}» проверено как фамилия, имя не проверялось. "
+            "Для полной проверки нужно «Имя Фамилия»"))
+        out.append(Finding(OK, "Одна фамилия, не тройная", rule=RULES["triple"]))
     elif len(surname_pieces) > 2:
         out.append(Finding(BLOCK, "Тройная фамилия",
                            "частей фамилии больше двух: " + " ".join(surname_pieces),
@@ -367,14 +373,20 @@ def check_name(raw: str) -> list[Finding]:
         out.append(Finding(OK, "Одна фамилия, не тройная", rule=RULES["triple"]))
 
     # --- полная форма имени -----------------------------------------
-    short = SHORT_NAMES.get(key_of(first)) or SHORT_NAMES.get(first.lower())
-    if short:
+    if surname_only:
         out.append(Finding(
-            BLOCK, "Имя не в полной форме",
-            f"«{first}» — сокращение, полная форма: {short}",
-            RULES["short"], fix=short.split(" или ")[0]))
+            INFO, "Имя не проверялось",
+            "его не было во вводе, так что сокращения в нём могли остаться "
+            "незамеченными"))
     else:
-        out.append(Finding(OK, "Имя в полной форме", rule=RULES["short"]))
+        short = SHORT_NAMES.get(key_of(first)) or SHORT_NAMES.get(first.lower())
+        if short:
+            out.append(Finding(
+                BLOCK, "Имя не в полной форме",
+                f"«{first}» — сокращение, полная форма: {short}",
+                RULES["short"], fix=short.split(" или ")[0]))
+        else:
+            out.append(Finding(OK, "Имя в полной форме", rule=RULES["short"]))
 
     # --- прямые запреты ------------------------------------------------
     prof = _stem_hit_in(words, PROFANITY_S)

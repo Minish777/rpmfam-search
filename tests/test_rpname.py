@@ -74,8 +74,9 @@ class TestFormat(unittest.TestCase):
     def test_triple_surname(self):
         self.assertTrue(titles("Алекс Петров-Водкин-Лукин"), "тройная фамилия")
 
-    def test_no_surname(self):
-        self.assertIn("Нет фамилии", titles("Алекс"))
+    def test_single_word_never_says_missing_surname(self):
+        """Одно слово трактуется как фамилия, а не как забытое имя."""
+        self.assertNotIn("Нет фамилии", titles("Алекс"))
 
     def test_empty(self):
         self.assertIn("Пустое имя", titles("   "))
@@ -193,3 +194,41 @@ class TestReportShape(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestSurnameOnly(unittest.TestCase):
+    """Одно слово — это фамилия.
+
+    Сотрудник чаще всего приходит именно с фамилией, и ругаться на неё
+    «нет фамилии» бессмысленно. Но имя при этом остаётся непроверенным,
+    и отчёт обязан это сказать.
+    """
+
+    def test_single_word_is_surname_not_block(self):
+        found = rpname.check_name("Воронов")
+        self.assertEqual(blocked("Воронов"), [])
+        warns = [f for f in found if f.level == "warn"]
+        self.assertIn("Введена только фамилия", {f.title for f in warns})
+
+    def test_surname_checks_still_run(self):
+        """Одно слово проверяется по всем запретам фамилии."""
+        self.assertIn("Мат", titles("Сукачёв"))
+        self.assertIn("Цвет вместо фамилии", titles("Белый"))
+        self.assertIn("Профессия или должность вместо фамилии", titles("Инженеров"))
+
+    def test_name_not_claimed_as_checked(self):
+        """Нельзя писать «имя в полной форме», если имени не было."""
+        oks = {f.title for f in rpname.check_name("Воронов")
+               if f.level == "ok"}
+        self.assertNotIn("Имя в полной форме", oks)
+        infos = {f.title for f in rpname.check_name("Воронов")
+                 if f.level == "info"}
+        self.assertIn("Имя не проверялось", infos)
+
+    def test_full_name_unchanged(self):
+        oks = {f.title for f in rpname.check_name("Алекс Вендетто")
+               if f.level == "ok"}
+        self.assertIn("Имя в полной форме", oks)
+
+    def test_empty_still_blocks(self):
+        self.assertIn("Пустое имя", titles("   "))
