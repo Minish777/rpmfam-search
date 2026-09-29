@@ -278,3 +278,26 @@ class TestYoFolding(unittest.TestCase):
             self.assertEqual(rpname.key_of(a), rpname.key_of(b), a)
             self.assertIn(rpname.key_of(a).replace("ё", "е"),
                           rpname._words(a), a)
+
+
+class TestRuleBeatsReality(unittest.TestCase):
+    """Запрещено — значит запрещено, даже если это настоящая фамилия.
+
+    Слова ниже одновременно фамилии и запрещённые по правилам: берёза,
+    ёлка, дуб, куст, шахтёр, комбайнёр. Решение владельца: блокировать.
+    Тест нужен, чтобы кто-то не счёл их ложными срабатываниями и не
+    завёл исключения.
+    """
+
+    def test_plant_and_profession_surnames_still_blocked(self):
+        for n in ("Пётр Берёзов", "Пётр Елка", "Иван Дуб", "Алекс Куст",
+                  "Пётр Шахтёр", "Пётр Комбайнёр"):
+            self.assertTrue(blocked(n), n)
+
+    def test_not_reclassified_as_false_positive(self):
+        """Слова ловятся тем же правилом, что и обычные запреты."""
+        for n in ("Пётр Берёзов", "Пётр Шахтёр"):
+            titles_found = titles(n)
+            self.assertTrue(
+                any("Растение" in t or "Профессия" in t for t in titles_found),
+                (n, titles_found))
