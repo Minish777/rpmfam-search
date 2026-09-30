@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.2.8"
+__version__ = "1.2.9"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -786,8 +786,17 @@ def print_person_hits(query: str, persons, contains, numbers, contacts: bool) ->
         return
 
     if looks_like_surname(query):
-        print(C.red(f'Фамилия "{query}" не зарегистрирована — выдать её нельзя.'))
         kinds = {match_kind(query, p) for _, p in persons}
+        # Где совпало — важнее догадки по буквам. Если слово нашлось в
+        # имени представителя, фамилией оно быть не может, и говорить
+        # «выдать её нельзя» бессмысленно: человек зарегистрирован,
+        # просто фамилия у него другая.
+        if kinds == {"имени"}:
+            print(C.yellow(f'"{query}" — это имя, не фамилия.'))
+            print(C.dim("Фамилия в документе есть, выдавать можно. "
+                        "Проверь фамилию:"))
+        else:
+            print(C.red(f'Фамилия "{query}" не зарегистрирована — выдать её нельзя.'))
         where = WHERE[sorted(kinds)[0]] if len(kinds) == 1 else None
         if where:
             print()

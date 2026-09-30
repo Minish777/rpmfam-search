@@ -1271,3 +1271,61 @@ class TestOutputFormatting(unittest.TestCase):
         """--dос с русской «о» должен работать, как и раньше."""
         args = r.build_parser().parse_args(r.fix_flags(["--dос", "reset"]))
         self.assertEqual(args.doc, "reset")
+
+
+def name_report(query, entries):
+    """Вывод находок по людям для конкретного набора записей."""
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        r.print_person_hits(query, [(e, p) for e in entries
+                                    for b in e["blocks"] for p in b["people"]],
+                            False, False, False)
+    return buf.getvalue()
+
+
+class TestNameIsNotSurname(unittest.TestCase):
+    """Слово может совпасть с именем, а не с фамилией.
+
+    Раньше вывод не различал эти случаи и на любое кириллическое
+    слово отвечал «Фамилия не зарегистрирована — выдать её нельзя».
+    Для имени представителя это неверно: человек зарегистрирован,
+    просто фамилия другая, и такой ответ сбивает с толку.
+
+    Проверяем на синтетических записях: живой документ меняется, и
+    тест начал бы падать из-за чужой правки.
+    """
+
+    def _doc(self, surname, person, nick):
+        return [dict(ES[0], name=surname, blocks=[
+            {"people": [{"role": r.ROLE_HEAD, "name": person, "nick": nick,
+                         "passport": "RPM-000999", "phone": "10000099"}]}])]
+
+    def test_first_name_says_it_is_a_name(self):
+        out = name_report("Санчез", self._doc("Дэ-Сангрэ", "Санчез Дэ-Сангрэ", "Zerl"))
+        self.assertIn('"Санчез" — это имя, не фамилия.', out)
+        self.assertIn("выдавать можно", out)
+        self.assertNotIn("выдать её нельзя", out)
+
+    def test_first_name_still_shows_family(self):
+        out = name_report("Санчез",
+                          self._doc("Дэ-Сангрэ", "Санчез Дэ-Сангрэ", "Zerl"))
+        self.assertIn("Дэ-Сангрэ", out)
+        self.assertIn("в имени представителя", out)
+
+    def test_double_surname_still_forbidden(self):
+        """Совпадение в фамилии — это другое, запрет должен остаться."""
+        out = name_report("Хёдо", self._doc("Вендеркольт",
+                                            "Крисоль Вендеркольт-Хёдо", "kr"))
+        self.assertIn("не зарегистрирована", out)
+        self.assertIn("выдать её нельзя", out)
+        self.assertIn("в фамилии представителя", out)
+
+    def test_registered_family_unaffected(self):
+        out = full_report("Амброус")
+        self.assertIn("Зарегистрированная фамилия:", out)
+        self.assertNotIn("выдать её нельзя", out)
+
+    def test_nick_unaffected(self):
+        out = full_report("sqW1nz")
+        self.assertIn("Представитель с ником", out)
+        self.assertNotIn("не зарегистрирована", out)
