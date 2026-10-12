@@ -1407,3 +1407,66 @@ class TestNewGovernorDocument(unittest.TestCase):
     def test_notes_found_without_updater_line(self):
         db = r.parse(NEW_DOC)
         self.assertEqual(len(db["notes"]), 3)  # c, a, b
+
+
+COMBINED_DOC = """Список зарегистрированных фамилий штата RPM North
+
+А
+ Арч[a]
+Б
+ Бронзе[b]*[c]
+В
+ Вейл[d]
+
+(список может видоизменяться со временем)
+(Последнее обновление фам документа:
+26.09.2026
+(Обновил: Григорий Ваховски | KapiKapial)
+
+[a]Глава - Алиса Блэйд-Арч (LenaArch)
+Номер паспорта - RPM-879252
+Номер телефона - 12421966
+[b]Глава - Олег Бронзе (Oleg)
+Номер паспорта - RPM-111111
+Номер телефона - 11111111
+[c]Заместитель - Луми Бронзе-Тест (Lumi)
+Номер паспорта - RPM-222222
+Номер телефона - 22222222
+[d]Глава - Константин Вейл (xKanzy)
+Номер паспорта - RPM-333333
+Номер телефона - 33333333
+"""
+
+
+class TestCombinedLayout(unittest.TestCase):
+    """Документ со старыми разделителями и сносками после списка.
+
+    Так устроен текущий документ: «(список может...» и «(Обновил»
+    на месте, а сноски идут следом за фамилиями.
+    """
+
+    def test_surnames_only(self):
+        names = {e["name"] for e in r.entries(r.parse(COMBINED_DOC))}
+        self.assertEqual(names, {"Арч", "Бронзе", "Вейл"})
+
+    def test_people_linked(self):
+        es = {e["name"]: e for e in r.entries(r.parse(COMBINED_DOC))}
+        self.assertEqual(sum(len(b["people"]) for b in es["Арч"]["blocks"]), 1)
+        self.assertEqual(sum(len(b["people"]) for b in es["Вейл"]["blocks"]), 1)
+
+    def test_two_markers_join_one_surname(self):
+        es = {e["name"]: e for e in r.entries(r.parse(COMBINED_DOC))}
+        self.assertEqual(sorted(es["Бронзе"]["markers"]), ["b", "c"])
+        self.assertEqual(sum(len(b["people"]) for b in es["Бронзе"]["blocks"]), 2)
+
+    def test_star_and_updater_read(self):
+        db = r.parse(COMBINED_DOC)
+        es = {e["name"]: e for e in r.entries(db)}
+        self.assertTrue(es["Бронзе"]["star"])
+        self.assertEqual(db["updated_at"], "26.09.2026")
+        self.assertIn("Ваховски", db["updated_by"] or "")
+
+    def test_service_lines_not_surnames(self):
+        names = {e["name"] for e in r.entries(r.parse(COMBINED_DOC))}
+        for junk in ("26.09.2026", "Последнее обновление фам документа"):
+            self.assertNotIn(junk, names, junk)

@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -37,7 +37,7 @@ UPDATE_INTERVAL = 12 * 3600   # как часто проверять обнов�
 RE_VERSION = re.compile(r'^__version__\s*=\s*["\'](.+?)["\']', re.M)
 
 
-SUGGESTED_DOC_ID = "1qybuXaWuRSzVuXa_lO7LH2QCqxAW3uZF5E_nurMLtps"
+SUGGESTED_DOC_ID = "1iKSaHdFA-CLK5HsWBmZhx-Hkoql6tBOKaSWw2jsK75c"
 SUGGESTED_LABEL = "RPM North"
 
 
