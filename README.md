@@ -72,7 +72,7 @@ python -m rpmfam_search Амброус
 
 ```
 https://docs.google.com/document/d/1a_7a…/edit?pli=1
-1a_7aQdGgEZadPHEW7WEq8rIaWDm2lcx4mXs7W-PzAwA
+1qybuXaWuRSzVuXa_lO7LH2QCqxAW3uZF5E_nurMLtps
 ```
 
 Документ сразу проверяется: если это не реестр фамилий, утилита скажет

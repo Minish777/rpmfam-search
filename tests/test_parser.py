@@ -114,7 +114,8 @@ class TestPersonName(unittest.TestCase):
 
 class TestSurnames(unittest.TestCase):
     def test_all_surnames(self):
-        self.assertEqual(len(ES), 29)
+        # 29 -> 31: раньше теряли фамилии, стоящие перед строкой-буквой
+        self.assertEqual(len(ES), 31)
 
     def test_no_intro_text_as_surname(self):
         """Баг: вводный абзацы документа попадали в список как фамилии."""
@@ -1209,8 +1210,11 @@ class TestOutputFormatting(unittest.TestCase):
         self.assertIn("Зарегистрированная фамилия:", src)
 
     def test_footer_labels_aligned(self):
-        out = full_report("Амброус")
-        rows = [l for l in out.splitlines()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            r.footer({"updated_at": "26.09.2026", "updated_by": "Кто-то"},
+                     {"cache": None, "label": "RPM North"})
+        rows = [l for l in buf.getvalue().splitlines()
                 if l.startswith(("обновлён:", "данные от:", "источник:"))]
         self.assertEqual(len(rows), 3, rows)
         # Выравнивание задано от начала строки, а не от двоеточия:
@@ -1220,6 +1224,21 @@ class TestOutputFormatting(unittest.TestCase):
             tail = line.split(":", 1)[1]
             starts.add(line.index(":") + 1 + len(tail) - len(tail.lstrip()))
         self.assertEqual(len(starts), 1, f"значения не выровнены: {rows}")
+
+    def test_footer_hides_row_when_no_date_in_document(self):
+        """В новом документе строки «Обновил» нет — не показываем «неизвестно»."""
+        cache = os.path.join(r.cache_dir(), "doc-test.txt")
+        os.makedirs(r.cache_dir(), exist_ok=True)
+        with open(cache, "w", encoding="utf-8") as f:
+            f.write("x")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            r.footer({}, {"cache": cache, "label": "RPM North"})
+        out = buf.getvalue()
+        os.remove(cache)
+        self.assertNotIn("обновлён:", out)
+        self.assertNotIn("неизвестно", out)
+        self.assertIn("источник:", out)
 
     def test_footer_survives_missing_date(self):
         """Без даты в документе футер не должен падать."""
@@ -1329,3 +1348,62 @@ class TestNameIsNotSurname(unittest.TestCase):
         out = full_report("sqW1nz")
         self.assertIn("Представитель с ником", out)
         self.assertNotIn("не зарегистрирована", out)
+
+
+NEW_DOC = """Список зарегистрированных фамилий штата RPM North
+
+Зарегистрированные фамилии НЕЛЬЗЯ выдавать без разрешения Главы.
+
+А
+ Арч[a]
+Б
+ Бронзе
+В
+ Вейл[b]
+Г
+ Гуськов
+
+[a]Глава - Алиса Блэйд-Арч (LenaArch)
+Номер паспорта - RPM-879252
+Номер телефона - 12421966
+[b]Глава - Луми Тестова-Вейл (lum1nirov)
+Номер паспорта - RPM-651680
+Номер телефона - 95075055
+[c]Относятся к фамилии Гуськов
+"""
+
+
+class TestNewGovernorDocument(unittest.TestCase):
+    """Документ после смены губернатора устроен иначе.
+
+    Список фамилий идёт до конца файла, строки «(Обновил» больше нет,
+    а сноски следуют за списком. Из-за этого люди и номера паспортов
+    попадали в список фамилий, а фамилия перед строкой-буквой терялась.
+    """
+
+    def test_people_not_parsed_as_surnames(self):
+        es = r.entries(r.parse(NEW_DOC))
+        names = {e["name"] for e in es}
+        for junk in ("Глава - Алиса Блэйд-Арч (LenaArch)", "Номер паспорта",
+                     "Номер телефона", "Луми"):
+            self.assertNotIn(junk, names, junk)
+
+    def test_real_surnames_survive(self):
+        names = {e["name"] for e in r.entries(r.parse(NEW_DOC))}
+        self.assertEqual(names, {"Арч", "Бронзе", "Вейл", "Гуськов"})
+
+    def test_marker_links_person(self):
+        es = {e["name"]: e for e in r.entries(r.parse(NEW_DOC))}
+        self.assertEqual(sum(len(b["people"]) for b in es["Арч"]["blocks"]), 1)
+        self.assertEqual(sum(len(b["people"]) for b in es["Вейл"]["blocks"]), 1)
+
+    def test_surname_before_letter_not_lost(self):
+        """Строка-буква закрывает прошлую фамилию, а не отменяет её."""
+        doc = NEW_DOC.replace("Б\n Бронзе", "Б\n Бронзе\nВ новый")
+        doc = doc.replace("В\n Вейл[b]", "В\n Вейл[b]")
+        es = {e["name"] for e in r.entries(r.parse(doc))}
+        self.assertIn("В новый", es)
+
+    def test_notes_found_without_updater_line(self):
+        db = r.parse(NEW_DOC)
+        self.assertEqual(len(db["notes"]), 3)  # c, a, b

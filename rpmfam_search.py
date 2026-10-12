@@ -25,7 +25,7 @@ APP = "rpmfam-search"
 
 # Документ не выбирается по умолчанию: на первом запуске утилита сама
 # спрашивает. Этот ID — только предложение в списке при настройке.
-__version__ = "1.2.9"
+__version__ = "1.3.0"
 
 # репозиторий, откуда берём обновления
 REPO = "Minish777/rpmfam-search"
@@ -37,7 +37,7 @@ UPDATE_INTERVAL = 12 * 3600   # как часто проверять обнов�
 RE_VERSION = re.compile(r'^__version__\s*=\s*["\'](.+?)["\']', re.M)
 
 
-SUGGESTED_DOC_ID = "1a_7aQdGgEZadPHEW7WEq8rIaWDm2lcx4mXs7W-PzAwA"
+SUGGESTED_DOC_ID = "1qybuXaWuRSzVuXa_lO7LH2QCqxAW3uZF5E_nurMLtps"
 SUGGESTED_LABEL = "RPM North"
 
 
@@ -63,6 +63,15 @@ RE_FIELD = re.compile(
     r"^\s*(?:номер|номре|номер\s)?\s*([а-яa-z ]{3,20}?)\s*[-–—]\s*(.+?)\s*$", re.I
 )
 RE_MARKER = re.compile(r"^\s*\[([a-z]{1,2})\]", re.I)
+# Маркер в начале строки плюс роль: начало сносок, а не список фамилий
+RE_NOTE_START = re.compile(
+    r"^\s*\[[a-z]{1,2}\]\s*(?:Глава|Заместитель)\b", re.I)
+# Пояснения в списке фамилий — не фамилии: «Е, Ё, Ж — нет записей»,
+# «Кассийоп (мифологическое название — не фамилия)». Короткие скобки
+# вида «(а)» остаются: это мужская и женская формы одной фамилии.
+RE_NOT_A_SURNAME = re.compile(r"\s—\s|нет записей|\(\s*\S{6,}\s*\)")
+# Сноска-перенаправление: «[c]Относятся к фамилии Холлидей»
+RE_NOTE_REF = re.compile(r"^\s*\[[a-z]{1,2}\]\s*Относятся\b", re.I)
 RE_REF = re.compile(r"относ\w*\s+к\s+(.+?)\s*$", re.I)
 RE_ANYONE = re.compile(r"подойдет\s+любой", re.I)
 RE_CAVEAT = re.compile(r"при\s+условии", re.I)
@@ -445,6 +454,30 @@ def parse_block(block: str) -> dict:
     return {"people": people, "note": note}
 
 
+def _notes_start(lines: list[str]) -> int:
+    """Номер строки, с которой начинаются сноски с представителями.
+
+    Раньше граница искалась только по строке «(Обновил», а её в документе
+    после смены губернатора нет: список фамилий идёт до конца файла, и
+    сноски идут следом. Без этой границы строки «Глава - ...» и «Номер
+    паспорта - ...» попадали в список фамилий.
+
+    Строка вида «[bq]Дельта[br]» начинается с маркера, но принадлежит
+    списку, поэтому одного маркера мало: нужна ещё роль.
+    """
+    for i, l in enumerate(lines):
+        # Либо маркер сразу с ролью, либо сноска-перенаправление
+        # «Относятся к фамилии X». Склеенная строка списка вида
+        # «[bq]Дельта[br]» под это не попадает: роли и слова «Относятся»
+        # в ней нет.
+        if RE_NOTE_START.match(l) or RE_NOTE_REF.match(l):
+            return i
+    for i, l in enumerate(lines):
+        if l.strip().startswith("(Обновил"):
+            return i + 1
+    return len(lines)
+
+
 def _surname_section(text: str) -> tuple[list[str], int]:
     lines = text.split("\n")
     end = len(lines)
@@ -456,6 +489,8 @@ def _surname_section(text: str) -> tuple[list[str], int]:
         if l.strip().startswith("(Обновил"):
             end = min(end, i)
             break
+    # Сноски с представителями — тоже конец списка фамилий.
+    end = min(end, _notes_start(lines))
     # начало списка — первая строка-буква, до неё заголовок и правила
     start = 0
     for i, l in enumerate(lines[:end]):
@@ -478,6 +513,8 @@ def parse_surnames(lines: list[str], start: int, end: int) -> list[dict]:
         n = norm(name)
         if not n or n.startswith("(") or len(n) < 2:
             return
+        if RE_NOT_A_SURNAME.search(n):
+            return
         if marker is None:
             out.append({"name": n, "markers": [], "star": False})
             return
@@ -496,6 +533,12 @@ def parse_surnames(lines: list[str], start: int, end: int) -> list[dict]:
         s = norm(s.replace("*", " "))
 
         if len(s) == 1 and s.isalpha():
+            # Строка-буква закрывает предыдущую фамилию, а не отменяет её.
+            # Раньше фамилия терялась: в новом документе буква стоит на
+            # своей строке, а фамилия — на следующей, и «Зетрикс» исчезал
+            # при переходе к «И».
+            if pending:
+                emit(pending, None)
             pending = None
             continue
 
@@ -538,11 +581,7 @@ def parse(text: str) -> dict:
     notes: dict[str, dict] = {}
     cur = None
     buf: list[str] = []
-    note_start = 0
-    for i, l in enumerate(lines):
-        if l.strip().startswith("(Обновил"):
-            note_start = i + 1
-            break
+    note_start = _notes_start(lines)
     for l in lines[note_start:]:
         m = RE_MARKER.match(l)
         if m:
@@ -857,7 +896,16 @@ def print_entry(e: dict, entries_list, depth: int = 0, seen=None, links=None,
     elif not people and e.get("star"):
         star_notice(pad + "  ")
     elif not people:
-        print(f"{pad}  {C.yellow(note or 'нет данных в документе')}")
+        # Фамилия есть в списке, но сноски к ней нет. Это не «битые данные»:
+        # в документе после смены губернатора большинство фамилий идут без
+        # представителя, и спросить разрешение просто не у кого.
+        if e.get("markers"):
+            print(f"{pad}  {C.yellow(note or 'в сноске документа нет представителя')}")
+        else:
+            msg = ("представитель не указан в документе — "
+                   "разрешение нужно у Главы или Зама фамы")
+            print(f"{pad}  {C.yellow(msg)}")
+
     else:
         for p in heads:
             print(f"{pad}  {C.green('Представитель:')} {fmt_person(p)}")
@@ -888,6 +936,9 @@ def footer(db: dict, ctx: dict) -> None:
     rows = [("обновлён", updated),
             ("данные от", fetched_at(ctx["cache"])),
             ("источник", ctx["label"])]
+    # Если в документе нет строки об обновлении, «неизвестно» только путает.
+    if not (at or by):
+        rows.pop(0)
     labels = [k + ":" for k, _ in rows]
     width = max(len(x) for x in labels)
     for label, (_, value) in zip(labels, rows):
